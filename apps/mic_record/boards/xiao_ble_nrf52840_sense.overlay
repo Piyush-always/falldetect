@@ -1,0 +1,27 @@
+/*
+ * PDM microphone enablement for the XIAO nRF52840 Sense.
+ *
+ * Two board defaults block the microphone, and both must be overridden:
+ *
+ *   1. The mic supply rail (P1.10) has no `regulator-boot-on`, unlike the IMU
+ *      rail, so it is powered down at boot.
+ *   2. `pdm0` is `status = "disabled"` in nrf52840.dtsi; the board DTS attaches
+ *      pinctrl and a clock source but never enables the peripheral.
+ *
+ * This mirrors Zephyr's own overlay for this exact board,
+ * samples/drivers/audio/dmic/boards/xiao_ble_nrf52840_sense.overlay.
+ *
+ * NOTE: `regulator-boot-on` leaves the mic powered permanently. That is correct
+ * for a bench recorder and WRONG for the wearable, where the rail must stay off
+ * until audio is actually needed (see PROJECT_OUTLINE.md §7.5).
+ */
+
+/ {
+	msm261d3526hicpm-c-en {
+		regulator-boot-on;
+	};
+};
+
+dmic_dev: &pdm0 {
+	status = "okay";
+};

@@ -1,0 +1,69 @@
+/*
+ * BLE OTA layout: splits the board's stock 788 KB "Application" partition
+ * (zephyr/dts/vendor/nordic/nrf52840_partition_uf2_sdv7.dtsi, included by
+ * zephyr/boards/seeed/xiao_ble/xiao_ble_common.dtsi) into MCUboot + two
+ * update slots.
+ *
+ * The three regions the Adafruit UF2 bootloader itself owns - SoftDevice
+ * (0x0-0x27000), Storage (0xec000-0xf4000), and its own code at the top of
+ * flash (0xf4000-0x100000, previously labelled "boot_partition"/"UF2" in the
+ * stock dtsi) - keep their stock addresses and sizes, and are simply left
+ * out of this partitions node. Nothing here writes to that top-of-flash
+ * region, so double-tap-RST UF2 recovery still works for this entire span
+ * even if a bad OTA image is ever written to slot0/slot1.
+ *
+ * Must stay identical to sysbuild/mcuboot.overlay - that file gives MCUboot
+ * itself the same view of these partitions; this one gives it to the app.
+ *
+ * Math (hand-verified, fills the stock 0x27000-0xec000 span exactly):
+ *   0x27000-0x33000  boot_partition   MCUboot itself       48 KB
+ *   0x33000-0x8f800  slot0_partition  primary app slot    370 KB
+ *   0x8f800-0xec000  slot1_partition  secondary/OTA slot  370 KB
+ */
+
+&flash0 {
+	/delete-node/ partitions;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		reserved_partition_0: partition@0 {
+			label = "SoftDevice";
+			read-only;
+			reg = <0x00000000 0x00027000>;
+		};
+
+		boot_partition: partition@27000 {
+			label = "mcuboot";
+			reg = <0x00027000 0x0000C000>;
+		};
+
+		slot0_partition: partition@33000 {
+			label = "image-0";
+			reg = <0x00033000 0x0005C800>;
+		};
+
+		slot1_partition: partition@8f800 {
+			label = "image-1";
+			reg = <0x0008F800 0x0005C800>;
+		};
+
+		storage_partition: partition@ec000 {
+			label = "Storage";
+			reg = <0x000EC000 0x00008000>;
+		};
+	};
+};
+
+/*
+ * Set directly for the same reason as sysbuild/mcuboot.overlay: the board's
+ * stock chosen node points at the code_partition label this overlay just
+ * deleted. The app runs from slot0, not from boot_partition (that's MCUboot's).
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+	};
+};

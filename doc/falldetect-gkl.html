@@ -1,0 +1,926 @@
+﻿<title>falldetect-gkl â€” Firmware Handbook</title>
+
+<style>
+/* â”€â”€ tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+:root{
+  --paper:#F3F4F6;  --surface:#FFFFFF; --sunk:#ECEEF1;
+  --ink:#14171B;    --ink-soft:#596069; --ink-faint:#858D97;
+  --rule:#D8DCE1;   --rule-soft:#E6E9ED;
+  --brass:#8A6A1F;  --brass-bright:#A9832B; --brass-wash:#F0E7D2;
+  --alert:#B0261C;  --alert-wash:#F7E4E2;
+  --ok:#1E6A48;     --ok-wash:#DFEFE7;
+  --shadow:0 1px 2px rgba(20,23,27,.05),0 8px 24px -12px rgba(20,23,27,.12);
+
+  --sans:system-ui,-apple-system,"Segoe UI Variable Display","Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --mono:ui-monospace,"Cascadia Code","SF Mono",Consolas,"Roboto Mono",monospace;
+
+  --measure:68ch;
+  --rail:236px;
+}
+/* Light is the default in every case - there is deliberately no
+   prefers-color-scheme rule, so a dark-OS viewer still opens on the light page.
+   Dark is opt-in through the in-page toggle or the viewer's own theme control;
+   both write the same data-theme attribute, so they cannot fight. */
+:root[data-theme="dark"]{
+  --paper:#101216; --surface:#171A1F; --sunk:#1D2127;
+  --ink:#E6E9EC;   --ink-soft:#959DA7; --ink-faint:#6E7681;
+  --rule:#262B32;  --rule-soft:#1F242A;
+  --brass:#C9A24D; --brass-bright:#DDB964; --brass-wash:#2A2317;
+  --alert:#EF7C6C; --alert-wash:#2E1A18;
+  --ok:#5CBE91;    --ok-wash:#132620;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+/* â”€â”€ base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:17px; line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--brass); text-underline-offset:.2em; text-decoration-thickness:1px}
+:focus-visible{outline:2px solid var(--brass-bright); outline-offset:3px; border-radius:2px}
+code,kbd{font-family:var(--mono); font-size:.86em}
+p code,li code,td code,th code{
+  background:var(--sunk); border:1px solid var(--rule-soft);
+  padding:.08em .34em; border-radius:3px; white-space:nowrap;
+}
+
+.skip{position:absolute;left:-9999px}
+.skip:focus{left:1rem;top:1rem;z-index:99;background:var(--surface);padding:.6rem 1rem;border:1px solid var(--rule)}
+
+/* â”€â”€ shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.shell{display:grid; grid-template-columns:var(--rail) minmax(0,1fr); gap:clamp(2rem,5vw,5rem);
+  max-width:1180px; margin:0 auto; padding:clamp(1.5rem,4vw,4rem) clamp(1.2rem,4vw,2.5rem)}
+
+.rail{position:sticky; top:2rem; align-self:start; display:flex; flex-direction:column; gap:.1rem;
+  max-height:calc(100vh - 4rem); overflow-y:auto}
+.rail__mark{font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-faint); padding-bottom:.9rem; margin-bottom:.5rem; border-bottom:1px solid var(--rule)}
+.rail a{display:flex; gap:.6rem; align-items:baseline; padding:.3rem 0; color:var(--ink-soft);
+  text-decoration:none; font-size:13.5px; line-height:1.35; border-left:2px solid transparent; padding-left:.7rem;
+  margin-left:-.7rem}
+.rail a:hover{color:var(--ink)}
+.rail a.on{color:var(--ink); border-left-color:var(--brass); font-weight:600}
+.rail a i{font-family:var(--mono); font-style:normal; font-size:11px; color:var(--ink-faint);
+  font-variant-numeric:tabular-nums}
+.rail a.on i{color:var(--brass)}
+
+/* theme switch â€” styled as a two-position panel selector, not a toggle icon,
+   so the current state is readable rather than inferred */
+.theme{display:flex; width:fit-content; margin-top:1.4rem; background:var(--surface);
+  border:1px solid var(--rule); border-radius:3px; overflow:hidden}
+.theme button{font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+  padding:.42rem .72rem; border:0; background:transparent; color:var(--ink-faint); cursor:pointer;
+  line-height:1}
+.theme button + button{border-left:1px solid var(--rule)}
+.theme button:hover{color:var(--ink)}
+.theme button[aria-pressed="true"]{background:var(--brass-wash); color:var(--brass)}
+
+.doc{min-width:0; display:flex; flex-direction:column; gap:2.5rem}
+/* one view at a time â€” the handbook paginates rather than scrolling as a slab */
+.view{display:none}
+.view.is-on{display:flex; flex-direction:column; gap:1.15rem}
+#overview.is-on{gap:2.2rem}
+.doc p,.doc ul,.doc ol{margin:0; max-width:var(--measure)}
+.doc li{margin-bottom:.35rem}
+
+/* â”€â”€ masthead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.mast{display:flex; flex-direction:column; gap:1.15rem}
+.eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--brass); margin:0}
+.mast h1{margin:0; font-size:clamp(2.6rem,6.5vw,4rem); line-height:1.02; letter-spacing:-.035em;
+  font-weight:700; text-wrap:balance}
+.lede{font-size:clamp(1.08rem,2.1vw,1.3rem); line-height:1.5; color:var(--ink-soft);
+  max-width:60ch; text-wrap:pretty}
+.chips{display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.3rem}
+.chip{font-family:var(--mono); font-size:11.5px; letter-spacing:.04em; padding:.3rem .6rem;
+  border:1px solid var(--rule); border-radius:3px; color:var(--ink-soft); background:var(--surface)}
+.chip b{color:var(--ink); font-weight:600}
+
+/* â”€â”€ section headings: hairline + brass tick â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.sechead{display:flex; flex-direction:column; gap:.9rem}
+.sechead .bar{height:1px; background:var(--rule); position:relative}
+.sechead .bar::before{content:""; position:absolute; left:0; top:-3px; width:34px; height:7px; background:var(--brass)}
+.sechead .row{display:flex; gap:1rem; align-items:baseline}
+.sechead .num{font-family:var(--mono); font-size:12px; color:var(--brass); letter-spacing:.1em;
+  font-variant-numeric:tabular-nums; padding-top:.3rem}
+.sechead h2{margin:0; font-size:clamp(1.5rem,3vw,2rem); letter-spacing:-.025em; font-weight:650;
+  line-height:1.15; text-wrap:balance}
+h3{margin:1.4rem 0 0; font-size:1.06rem; letter-spacing:-.01em; font-weight:650}
+h3 + p{margin-top:.15rem}
+
+/* â”€â”€ hero trace â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.trace{background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:1.4rem 1.2rem 1rem;
+  box-shadow:var(--shadow); display:flex; flex-direction:column; gap:.9rem}
+.trace__top{display:flex; justify-content:space-between; align-items:baseline; gap:1rem; flex-wrap:wrap;
+  padding:0 .3rem}
+.trace__cap{font-family:var(--mono); font-size:11px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-faint)}
+.trace svg{display:block; width:100%; height:auto}
+.tr-grid{stroke:var(--rule); stroke-width:1}
+.tr-band{fill:var(--brass); opacity:.055}
+.tr-band.alt{opacity:.11}
+.tr-line{fill:none; stroke:var(--ink); stroke-width:1.6; stroke-linejoin:round; stroke-linecap:round}
+.tr-peak{fill:none; stroke:var(--alert); stroke-width:1.6; stroke-linejoin:round}
+.tr-tick{font-family:var(--mono); font-size:10px; fill:var(--ink-faint)}
+.tr-stage{font-family:var(--mono); font-size:10.5px; fill:var(--brass); letter-spacing:.06em}
+.tr-div{stroke:var(--brass); stroke-width:1; stroke-dasharray:2 3; opacity:.55}
+.trace__legend{display:flex; flex-wrap:wrap; gap:.35rem 1.4rem; padding:.2rem .3rem 0;
+  border-top:1px solid var(--rule-soft); padding-top:.8rem}
+.trace__legend div{font-size:12.5px; color:var(--ink-soft)}
+.trace__legend b{font-family:var(--mono); font-size:11px; color:var(--brass); letter-spacing:.06em;
+  display:block; font-weight:400}
+
+/* â”€â”€ tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.scroll{overflow-x:auto; border:1px solid var(--rule); border-radius:4px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:14.5px}
+th,td{text-align:left; padding:.62rem .85rem; border-bottom:1px solid var(--rule-soft); vertical-align:top}
+thead th{font-family:var(--mono); font-size:10.5px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-faint); font-weight:400; background:var(--sunk); border-bottom:1px solid var(--rule);
+  white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+td.m,th.m{font-family:var(--mono); font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap}
+td.k{font-weight:600; white-space:nowrap}
+
+.tag{font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
+  padding:.16rem .42rem; border-radius:3px; white-space:nowrap; border:1px solid transparent}
+.tag--v{color:var(--ok); background:var(--ok-wash); border-color:color-mix(in srgb,var(--ok) 28%,transparent)}
+.tag--d{color:var(--brass); background:var(--brass-wash); border-color:color-mix(in srgb,var(--brass) 30%,transparent)}
+.tag--a{color:var(--alert); background:var(--alert-wash); border-color:color-mix(in srgb,var(--alert) 28%,transparent)}
+
+.sev{display:inline-block; width:3px; height:1.05em; border-radius:2px; vertical-align:-.18em; margin-right:.5rem}
+.sev--hi{background:var(--alert)} .sev--md{background:var(--brass)} .sev--lo{background:var(--ink-faint)}
+
+/* â”€â”€ notes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.note{border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.95rem 1.1rem;
+  display:flex; flex-direction:column; gap:.4rem; max-width:var(--measure)}
+.note__t{font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-faint)}
+.note p{font-size:15px; max-width:none}
+.note--alert{background:var(--alert-wash); border-color:color-mix(in srgb,var(--alert) 30%,transparent)}
+.note--alert .note__t{color:var(--alert)}
+.note--brass{background:var(--brass-wash); border-color:color-mix(in srgb,var(--brass) 32%,transparent)}
+.note--brass .note__t{color:var(--brass)}
+
+/* â”€â”€ code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+pre{margin:0; background:var(--surface); border:1px solid var(--rule); border-radius:4px;
+  padding:.95rem 1.1rem; overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6;
+  color:var(--ink-soft)}
+pre b{color:var(--ink); font-weight:600}
+pre i{color:var(--brass); font-style:normal}
+
+/* â”€â”€ flow diagram â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.flow{display:flex; flex-direction:column; gap:0; max-width:var(--measure)}
+.flow__n{border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.8rem 1rem}
+.flow__n h4{margin:0 0 .15rem; font-size:14.5px; font-weight:650; letter-spacing:-.005em}
+.flow__n p{margin:0; font-size:13.5px; color:var(--ink-soft)}
+.flow__n .w{font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--brass); display:block; margin-bottom:.3rem}
+.flow__l{display:flex; align-items:center; gap:.6rem; padding:.45rem 0 .45rem 1.4rem}
+.flow__l span{font-family:var(--mono); font-size:11px; color:var(--ink-faint); letter-spacing:.05em}
+.flow__l::before{content:""; width:1px; height:22px; background:var(--rule); position:absolute; margin-left:-1.4rem}
+.flow__l{position:relative}
+
+/* â”€â”€ phases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.phases{display:flex; flex-direction:column; gap:.5rem}
+.ph{display:grid; grid-template-columns:auto 1fr auto; gap:.9rem; align-items:baseline;
+  border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.75rem .95rem}
+.ph__n{font-family:var(--mono); font-size:11.5px; color:var(--brass); font-variant-numeric:tabular-nums}
+.ph__b h4{margin:0; font-size:14.5px; font-weight:650}
+.ph__b p{margin:.1rem 0 0; font-size:13.5px; color:var(--ink-soft); max-width:none}
+.ph--done{border-left:2px solid var(--ok)}
+.ph--now{border-left:2px solid var(--brass)}
+
+.kv{display:grid; grid-template-columns:auto 1fr; gap:.3rem 1.2rem; font-family:var(--mono);
+  font-size:13px; max-width:var(--measure)}
+.kv dt{color:var(--ink-faint)}
+.kv dd{margin:0; color:var(--ink); font-variant-numeric:tabular-nums}
+
+/* â”€â”€ pager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+.pager{display:flex; gap:1rem; align-items:stretch; border-top:1px solid var(--rule);
+  padding-top:1.4rem}
+.pager a{display:flex; flex-direction:column; gap:.15rem; text-decoration:none; max-width:47%;
+  border:1px solid var(--rule); border-radius:4px; padding:.7rem .95rem; background:var(--surface);
+  color:var(--ink); transition:border-color .12s ease}
+.pager a:hover{border-color:var(--brass)}
+.pager a[hidden]{display:none}
+.pager span{font-family:var(--mono); font-size:10.5px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-faint)}
+.pager b{font-size:14.5px; font-weight:650; letter-spacing:-.012em; line-height:1.25}
+.pager .nx{margin-left:auto; align-items:flex-end; text-align:right}
+
+.foot{border-top:1px solid var(--rule); padding-top:1.2rem; font-size:13px; color:var(--ink-faint);
+  font-family:var(--mono)}
+
+@media (max-width:900px){
+  .shell{grid-template-columns:minmax(0,1fr); gap:2.5rem}
+  .rail{position:static; max-height:none; flex-direction:row; flex-wrap:wrap; gap:.15rem .9rem;
+    padding-bottom:1rem; border-bottom:1px solid var(--rule)}
+  .rail__mark{width:100%; border-bottom:0; padding-bottom:.4rem; margin-bottom:0}
+  .rail a{border-left:0; padding-left:0; margin-left:0}
+  .rail a.on{border-left:0; text-decoration:underline; text-decoration-color:var(--brass)}
+  .doc{gap:3.5rem}
+}
+@media (prefers-reduced-motion:reduce){
+  *{scroll-behavior:auto !important; animation:none !important; transition:none !important}
+}
+/* no smooth scrolling: navigation now swaps panels and resets to top, so an
+   animated scroll would just add lag between tab and content */
+</style>
+
+<a class="skip" href="#doc">Skip to content</a>
+
+<div class="shell">
+
+  <nav class="rail" aria-label="Sections">
+    <div class="rail__mark">falldetect-gkl</div>
+    <a href="#overview"><i>â€”</i>Overview</a>
+    <a href="#s1"><i>01</i>What this is</a>
+    <a href="#s2"><i>02</i>Hardware</a>
+    <a href="#s3"><i>03</i>Architecture</a>
+    <a href="#s4"><i>04</i>Decisions</a>
+    <a href="#s5"><i>05</i>Detection</a>
+    <a href="#s6"><i>06</i>Alert &amp; escalation</a>
+    <a href="#s7"><i>07</i>Power</a>
+    <a href="#s8"><i>08</i>Toolchain</a>
+    <a href="#s9"><i>09</i>Repository</a>
+    <a href="#s10"><i>10</i>Roadmap</a>
+    <a href="#s11"><i>11</i>Risks</a>
+    <a href="#s12"><i>12</i>Field notes</a>
+
+    <div class="theme" role="group" aria-label="Colour theme">
+      <button type="button" data-set="light" aria-pressed="true">Light</button>
+      <button type="button" data-set="dark" aria-pressed="false">Dark</button>
+    </div>
+  </nav>
+
+  <main class="doc" id="doc">
+
+    <section id="overview" class="view">
+    <header class="mast">
+      <p class="eyebrow">Wearable fall detection Â· Firmware handbook</p>
+      <h1>falldetect&#8209;gkl</h1>
+      <p class="lede">A wrist-worn device that detects when an older person falls at home,
+        and makes sure a human finds out. This is the single reference for the hardware,
+        the detection approach, the decisions already made, and the ground already covered.</p>
+      <div class="chips">
+        <span class="chip"><b>XIAO nRF52840 Sense</b></span>
+        <span class="chip">nRF Connect SDK <b>v3.1.1</b></span>
+        <span class="chip">Zephyr <b>4.1.99</b></span>
+        <span class="chip">Board <b>xiao_ble/nrf52840/sense</b></span>
+        <span class="chip">Phase <b>0 â†’ 1</b></span>
+      </div>
+    </header>
+
+    <figure class="trace" aria-label="Accelerometer signature of a fall, annotated with the four detection stages">
+      <div class="trace__top">
+        <span class="trace__cap">Acceleration magnitude Â· the signature we detect</span>
+        <span class="trace__cap">wrist Â· 208 Hz Â· Â±16 g</span>
+      </div>
+      <svg id="sig" viewBox="0 0 1000 280" role="img"
+           aria-label="A trace showing walking, then a free-fall dip below 0.5 g, a 3 g impact spike, a settling period, and sustained stillness."></svg>
+      <div class="trace__legend">
+        <div><b>1 Â· Free&#8209;fall</b>&lt; 0.5 g for 100â€“200 ms</div>
+        <div><b>2 Â· Impact</b>&gt; 2.5 g within 500 ms</div>
+        <div><b>3 Â· Orientation</b>gravity vector rotates</div>
+        <div><b>4 Â· Stillness</b>no attempt to get up</div>
+      </div>
+    </figure>
+    </section>
+
+    <!-- 01 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s1" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">01</span><h2>What this is</h2></div>
+      </div>
+
+      <p>This is not a fall detector. It is an <strong>escalation system</strong> whose sensor
+        happens to be an accelerometer. The firmware is perhaps 30% of the risk; the rest is
+        whether a caregiver is actually told, and whether they believe it when they are.</p>
+
+      <div class="note note--brass">
+        <span class="note__t">The constraint that shapes everything</span>
+        <p>Detecting a fall is easy. Not firing on <em>sitting down heavily, stairs, or leaning
+          on a walking frame</em> is the engineering problem. One false alarm at 3&nbsp;am and the
+          device comes off permanently â€” and then you have nothing. Specificity, not sensitivity,
+          is the budget.</p>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="m">ID</th><th>Criterion</th><th>Target</th><th>Measured by</th></tr></thead>
+          <tbody>
+            <tr><td class="m">S1</td><td class="k">Detect a hard fall</td><td>â‰¥ 90% sensitivity</td><td>Offline replay, wrist corpus</td></tr>
+            <tr><td class="m">S2</td><td class="k">Don't cry wolf</td><td>â‰¤ 1 false alarm / week</td><td>14-day wear trial</td></tr>
+            <tr><td class="m">S3</td><td class="k">Time to notification</td><td>â‰¤ 60 s from impact</td><td>Timestamped end-to-end trace</td></tr>
+            <tr><td class="m">S4</td><td class="k">Battery life</td><td>â‰¥ 7 days (stretch 30)</td><td>Measured, not calculated</td></tr>
+            <tr><td class="m">S5</td><td class="k">Cancel a false alarm</td><td>30 s window, one button</td><td>Usability test, target user</td></tr>
+            <tr><td class="m">S6</td><td class="k">Device-offline is an alert</td><td>Detected in 15 min</td><td>Cloud heartbeat watchdog</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p><strong>S6 is the one people forget.</strong> A dead device and a healthy person look
+        identical from the cloud. Without liveness monitoring you have a safety system that
+        stops working silently, and nobody notices until it matters.</p>
+    </section>
+
+    <!-- 02 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s2" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">02</span><h2>Hardware</h2></div>
+      </div>
+
+      <p>Every row below was read from the SDK devicetree or from the device itself â€” none of it
+        is taken from vendor marketing.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Item</th><th>Value</th><th>Confidence</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Board</td><td class="m">XIAO nRF52840 Sense</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">MCU</td><td class="m">nRF52840, Cortex-M4F @ 64 MHz</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">FPU</td><td class="m">present, single-precision only</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">RAM / Flash</td><td class="m">256 KB / 1 MB + 2 MB QSPI</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">IMU</td><td class="m">ST LSM6DS3TR-C, IÂ²C 0x6A</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">IMU interrupt</td><td class="m">INT1 â†’ P0.11</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">IMU power rail</td><td class="m">P1.08, boot-on</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Microphone</td><td class="m">MSM261D3526H1CPM, PDM</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Mic power rail</td><td class="m">P1.10, <em>off</em> at boot</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Radio</td><td class="m">BLE 5.0 / 802.15.4 â€” no WAN</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Charging</td><td class="m">BQ25101, 50 / 100 mA</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Board sleep current</td><td class="m">&lt; 5 ÂµA claimed</td><td><span class="tag tag--d">Unmeasured</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Board identity, read from the device</h3>
+      <pre><b>UF2 Bootloader</b> 0.6.1
+<b>Model</b>       Seeed XIAO nRF52840
+<b>Board-ID</b>    <i>Seeed_XIAO_nRF52840_Sense</i>
+<b>SoftDevice</b>  S140 version 7.3.0</pre>
+      <p>The S140 v7.3.0 SoftDevice is why applications link at <code>0x27000</code>. Zephyr does
+        not use the SoftDevice â€” it brings its own BLE host â€” it simply respects the reserved
+        region so the UF2 bootloader survives a flash.</p>
+
+      <div class="note note--brass">
+        <span class="note__t">The single most important hardware fact</span>
+        <p>The LSM6DS3TR-C is not a dumb accelerometer. It has an on-chip event engine â€”
+          free-fall, wake-up, activity/inactivity, 6D orientation, tap â€” plus a 4 KB FIFO, and
+          every event can be routed to INT1. That means the MCU can sleep at single-digit ÂµA and
+          be woken <em>by the fall itself</em>. The entire power architecture depends on it.</p>
+      </div>
+    </section>
+
+    <!-- 03 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s3" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">03</span><h2>System architecture</h2></div>
+      </div>
+
+      <p>The nRF52840 has no WiFi, no cellular, no LoRa. It is BLE-only and physically cannot
+        reach a cloud on its own â€” so the gateway choice defines the product's coverage envelope,
+        which is to say <em>where a person is allowed to fall and still be helped</em>.</p>
+
+      <div class="flow">
+        <div class="flow__n"><span class="w">On the body</span>
+          <h4>Wearable â€” XIAO nRF52840 Sense</h4>
+          <p>Accelerometer always on; MCU asleep until INT1 fires. Cascade + classifier, cancel
+            button, and an event store on QSPI that survives a dropped link.</p></div>
+        <div class="flow__l"><span>BLE Â· bonded + encrypted</span></div>
+        <div class="flow__n"><span class="w">In the home</span>
+          <h4>Hub â€” Raspberry Pi or ESP32</h4>
+          <p>BLE central, store-and-forward. The wearable never knows what the gateway is.</p></div>
+        <div class="flow__l"><span>MQTT / TLS</span></div>
+        <div class="flow__n"><span class="w">Cloud</span>
+          <h4>Ingest, dedup, escalate</h4>
+          <p>Idempotent by event ID, liveness watchdog, escalation ladder.</p></div>
+        <div class="flow__l"><span>push Â· SMS Â· voice</span></div>
+        <div class="flow__n"><span class="w">Human</span>
+          <h4>Caregiver 1 â†’ 2 â†’ emergency contact</h4>
+          <p>Acknowledgement required at each rung, or it escalates.</p></div>
+      </div>
+
+      <div class="note note--alert">
+        <span class="note__t">Disclose this, don't discover it</span>
+        <p>v1 is an <strong>in-home system</strong>. A fall in the garden, the street or a shop
+          will not be reported. That is a deliberate, bounded scope â€” but it must be stated
+          plainly to the wearer and their family. If coverage anywhere is genuinely required,
+          the XIAO is the wrong board and an nRF9160 / LTE-M is the answer.</p>
+      </div>
+
+      <p>The firmware rule that keeps the door open: <strong>the wearable never knows what the
+        gateway is.</strong> It advertises, connects, emits events, retries until acknowledged.
+        Adding a phone as a second path later becomes a gateway and cloud change with zero
+        firmware impact.</p>
+    </section>
+
+    <!-- 04 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s4" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">04</span><h2>Decisions</h2></div>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="m">ID</th><th>Decision</th><th>Chosen</th><th>Consequence</th></tr></thead>
+          <tbody>
+            <tr><td class="m">D1</td><td class="k">Connectivity</td><td>Fixed home hub</td>
+              <td>Reliable indoors, zero outdoor coverage. Phone path is additive in v2.</td></tr>
+            <tr><td class="m">D2</td><td class="k">Mount point</td><td>Wrist</td>
+              <td>Best compliance, worst accuracy. Moves risk from the product into the firmware.</td></tr>
+            <tr><td class="m">D3</td><td class="k">Toolchain</td><td>Zephyr / nRF Connect SDK</td>
+              <td>Upstream board support, real power management, MCUboot OTA.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>D2 is the consequential one</h3>
+      <p>Wrist was chosen for compliance, and that is a defensible trade â€” a worn device with a
+        weaker algorithm beats an accurate device in a drawer. But the arm moves independently of
+        the body, so two of the four classic cascade stages degrade, and the wrist sees far more
+        high-g daily activity than the trunk ever does.</p>
+      <p>There is also a wrist-specific complication worth designing around: the fall may land on
+        the arm wearing the device (huge spike, arm pinned under the body) or on the other side
+        (muted signal, arm free). These look completely different, and the dataset must contain
+        both.</p>
+    </section>
+
+    <!-- 05 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s5" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">05</span><h2>Detection at the wrist</h2></div>
+      </div>
+
+      <h3>The cascade</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Stage</th><th>Condition</th><th class="m">Start threshold</th><th>At the wrist</th></tr></thead>
+          <tbody>
+            <tr><td class="k">1 Â· Free-fall</td><td>|a| drops</td><td class="m">&lt; 0.5 g, 100â€“200 ms</td><td><span class="tag tag--v">Good</span> hardware IRQ, nearly free</td></tr>
+            <tr><td class="k">2 Â· Impact</td><td>|a| peak after free-fall</td><td class="m">&gt; 2.5â€“3.0 g in 500 ms</td><td><span class="tag tag--v">Good</span></td></tr>
+            <tr><td class="k">2b Â· Rotation</td><td>gyro peak during fall</td><td class="m">&gt; 200â€“300 Â°/s</td><td><span class="tag tag--v">Good</span> wrist-specific</td></tr>
+            <tr><td class="k">3 Â· Orientation</td><td>gravity vector rotates</td><td class="m">&gt; 45â€“60Â°</td><td><span class="tag tag--d">Weak</span> arm moves freely</td></tr>
+            <tr><td class="k">4 Â· Stillness</td><td>low variance after impact</td><td class="m">&lt; 0.1 g RMS, 15â€“20 s</td><td><span class="tag tag--d">Weak</span> but not useless</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>All thresholds are starting points from the literature, not tuned values. Every one gets
+        re-tuned against our own wrist data in Phase&nbsp;2.</p>
+
+      <h3>Gyro-on-demand â€” the idea that makes wrist viable</h3>
+      <p>Angular velocity carries much of the fall signature at the wrist. But the gyro draws
+        <strong>milliamps</strong> against tens of <strong>microamps</strong> for the
+        accelerometer, so running it continuously destroys the battery target outright. The
+        resolution is that you never have to:</p>
+      <pre>accel always on, hardware free-fall IRQ armed        <i>ÂµA</i>
+      â”‚  INT1 fires
+      â–¼
+MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gyro off â†’ classify â†’ sleep</pre>
+      <p>Because the IMU's FIFO has already been batching accelerometer data, this also recovers
+        the <strong>pre-trigger</strong> samples â€” the free-fall phase that happened before the
+        MCU woke, which a naive wake-on-interrupt design throws away.</p>
+
+      <h3>What must not trigger it</h3>
+      <p>The confounder list is longer at the wrist than anywhere else, which is precisely why
+        S2 is hard here: clapping Â· waving Â· gesturing while talking Â· brushing teeth Â· washing
+        hands Â· putting a hand down hard on a table Â· pushing up out of a chair by the armrests Â·
+        taking the watch off and dropping it Â· <strong>using a walking stick or frame</strong> Â·
+        leaning weight on the arm Â· reaching to a high shelf.</p>
+
+      <div class="note note--alert">
+        <span class="note__t">The one that will bite</span>
+        <p>Walking sticks and frames put high-g impact loading straight through the wrist,
+          hundreds of times a day, in exactly the users most likely to fall. If the detector
+          cannot separate a walking frame from a fall, S2 is unreachable. It needs its own
+          dataset category.</p>
+      </div>
+
+      <p>And the fall that does <em>not</em> look like one: the <strong>slow slump</strong>,
+        sliding down a wall or out of a chair. Little or no free-fall phase, so stage 1 never
+        fires. Documented as a known v1 gap rather than papered over.</p>
+    </section>
+
+    <!-- 06 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s6" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">06</span><h2>Alert &amp; escalation</h2></div>
+      </div>
+
+      <pre>IMPACT
+  â”œâ”€ t+0s     buzzer + LED, <b>30 s cancel countdown starts</b>
+  â”œâ”€ t+0s     BLE â†’ <i>PRE_ALERT</i> â†’ cloud          â† sent immediately
+  â”œâ”€ button   â†’ <i>CANCELLED</i> â†’ stand down
+  â”œâ”€ t+30s    no cancel â†’ <i>FALL_CONFIRMED</i>
+  â”œâ”€ cloud    â†’ caregiver 1  (push + SMS)
+  â”œâ”€ t+3min   no ack â†’ caregiver 2
+  â””â”€ t+6min   no ack â†’ emergency contact</pre>
+
+      <h3>Two things here are not optional</h3>
+      <p><strong>PRE_ALERT goes out before the countdown resolves.</strong> If the device is
+        smashed, the battery knocked loose, or the wearer crawls out of BLE range, the cloud has
+        still heard something. The cloud rule is that <em>a pre-alert followed by silence is a
+        fall</em>. Waiting for confirmation before transmitting means the worst falls are exactly
+        the ones you fail to report.</p>
+      <p><strong>The 30-second cancel window is what makes S2 survivable.</strong> It does not
+        reduce the false-positive rate; it collapses the <em>cost</em> from "caregiver panic at
+        3 am" to "annoying beep the wearer silences" â€” and that is what determines whether the
+        device stays worn. The wrist choice pays off here: the button is always reachable with
+        the opposite hand.</p>
+
+      <h3>Event schema</h3>
+      <pre>{
+  "device_id": "xiao-0001",
+  "event_id":  "<i>uuid-or-counter</i>",          <b>â† idempotent dedup</b>
+  "type":      "PRE_ALERT | FALL_CONFIRMED | CANCELLED | HEARTBEAT",
+  "ts_device": 1754049600,
+  "signature": { "freefall_ms": 180, "impact_g": 3.4,
+                 "gyro_peak_dps": 280, "tilt_deg": 72,
+                 "still_s": 8, "model_score": 0.91 },
+  "battery_pct": 87
+}</pre>
+      <p>The device retries until acknowledged, so duplicates are expected and must be harmless.
+        The raw <code>signature</code> travels on every alert: when triaging a false positive in
+        the field it is the difference between diagnosing it and guessing.</p>
+    </section>
+
+    <!-- 07 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s7" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">07</span><h2>Power</h2></div>
+      </div>
+
+      <p>The architecture <em>is</em> the power strategy: accelerometer always on with the MCU
+        asleep, gyro duty-cycled to candidate events only, BLE interval as long as tolerable,
+        and the microphone powered down entirely until Phase&nbsp;7.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Item</th><th class="m">Estimated average</th></tr></thead>
+          <tbody>
+            <tr><td class="k">nRF52840 System ON idle, RAM retained</td><td class="m">~2 ÂµA</td></tr>
+            <tr><td class="k">LSM6DS3TR-C low-power accel</td><td class="m">~40 ÂµA</td></tr>
+            <tr><td class="k">Gyro, duty-cycled on candidates</td><td class="m">~1â€“5 ÂµA</td></tr>
+            <tr><td class="k">BLE advertising / long interval</td><td class="m">~10â€“30 ÂµA</td></tr>
+            <tr><td class="k">Subtotal</td><td class="m">~55â€“80 ÂµA</td></tr>
+            <tr><td class="k">Regulator + charge IC quiescent</td><td class="m">unmeasured</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note note--alert">
+        <span class="note__t">Do not believe these numbers</span>
+        <p>Every figure above is derived from datasheets, not measured. The XIAO's onboard LDO
+          and BQ25101 have quiescent draw that can dominate the entire budget. Measuring real
+          board sleep current is a <strong>Phase 0</strong> task, not a Phase 6 one â€” if it lands
+          at 200 ÂµA you need to know before designing an enclosure around a battery size.</p>
+      </div>
+    </section>
+
+    <!-- 08 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s8" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">08</span><h2>Toolchain</h2></div>
+      </div>
+
+      <p>Versions below were read from real build output.</p>
+
+      <dl class="kv">
+        <dt>SDK</dt><dd>nRF Connect SDK v3.1.1 â€” C:\ncs\v3.1.1</dd>
+        <dt>RTOS</dt><dd>Zephyr 4.1.99 (ncs-v3.1.1)</dd>
+        <dt>Toolchain</dt><dd>Zephyr SDK 0.17.0 â€” bundle c1a76fddb2</dd>
+        <dt>Compiler</dt><dd>arm-zephyr-eabi-gcc 12.2.0 Â· GNU ld 2.38</dd>
+        <dt>C library</dt><dd>picolibc</dd>
+        <dt>Build</dt><dd>CMake 3.21.0 + Ninja, driven by west 1.4.0</dd>
+        <dt>Devicetree</dt><dd>dtc 1.4.7</dd>
+        <dt>Board</dt><dd>xiao_ble/nrf52840/sense</dd>
+        <dt>Flashing</dt><dd>UF2 mass storage â€” no debugger required</dd>
+      </dl>
+
+      <div class="note">
+        <span class="note__t">Why tools/build.ps1 exists</span>
+        <p><code>cmake</code>, <code>ninja</code>, <code>dtc</code> and the ARM compiler are
+          <strong>not on PATH</strong> â€” they live only inside the toolchain bundle, so a bare
+          <code>west build</code> in a fresh shell fails. The script sets the environment every
+          time, so a build never depends on a hand-configured shell.</p>
+      </div>
+
+      <pre><b>.\tools\build.ps1</b>                    <i># product firmware at repo root</i>
+<b>.\tools\build.ps1</b> blink -Pristine    <i># after prj.conf / overlay edits</i>
+<b>.\tools\build.ps1</b> mic_record -Flash  <i># waits 60 s â€” double-tap RST</i></pre>
+
+      <p>Flashing is a two-step dance: run with <code>-Flash</code>, then <strong>double-tap
+        RST</strong> (two firm presses about a quarter-second apart). The
+        <code>XIAO-SENSE</code> drive appears, the image is copied, and the board reboots into
+        it automatically.</p>
+    </section>
+
+    <!-- 09 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s9" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">09</span><h2>Repository</h2></div>
+      </div>
+
+      <p>The product firmware lives at the <strong>repository root</strong>. Everything under
+        <code>apps/</code> is a self-contained bench instrument with its own build files, and is
+        not part of the product build.</p>
+
+      <pre>falldetect-gkl/
+â”œâ”€â”€ <b>CMakeLists.txt</b>          <i>product firmware â€” root project</i>
+â”œâ”€â”€ <b>prj.conf</b>
+â”œâ”€â”€ <b>src/main.c</b>
+â”œâ”€â”€ doc/                    <i>this handbook</i>
+â”œâ”€â”€ apps/                   <i>bench instruments only</i>
+â”‚   â”œâ”€â”€ blink/              <i>Phase 0 bring-up</i>
+â”‚   â””â”€â”€ mic_record/         <i>PDM recorder + overlay</i>
+â”œâ”€â”€ tools/
+â”‚   â”œâ”€â”€ build.ps1           <i>build + flash driver</i>
+â”‚   â”œâ”€â”€ mic_gui.py          <i>recorder GUI</i>
+â”‚   â””â”€â”€ mic_gui.ps1
+â”œâ”€â”€ build/                  <i>generated, disposable</i>
+â””â”€â”€ recordings/             <i>captured .wav</i></pre>
+
+      <p>Adding a bench app takes three files â€” <code>CMakeLists.txt</code>,
+        <code>prj.conf</code>, <code>src/main.c</code> â€” plus an optional
+        <code>boards/xiao_ble_nrf52840_sense.overlay</code> when devicetree needs changing. That
+        filename is the board target with <code>/</code> replaced by <code>_</code>, and west
+        picks it up automatically.</p>
+    </section>
+
+    <!-- 10 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s10" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">10</span><h2>Roadmap</h2></div>
+      </div>
+
+      <p>These phases are a genuine sequence â€” each depends on the one before, and each has an
+        explicit verify step. No phase starts before the previous one passes.</p>
+
+      <div class="phases">
+        <div class="ph ph--done"><span class="ph__n">00</span>
+          <div class="ph__b"><h4>Bring-up</h4>
+            <p>Toolchain, board target, blink, UF2 flash path. <em>Verified â€” LED blinking, Sense variant confirmed.</em></p></div>
+          <span class="tag tag--v">Done</span></div>
+
+        <div class="ph ph--now"><span class="ph__n">01</span>
+          <div class="ph__b"><h4>Data collection rig</h4>
+            <p>IMU probe â†’ 208 Hz stream â†’ axis convention â†’ QSPI logging. Falls on a crash mat plus 30 h of wrist ADL.</p></div>
+          <span class="tag tag--d">Current</span></div>
+
+        <div class="ph"><span class="ph__n">02</span>
+          <div class="ph__b"><h4>Offline algorithm</h4>
+            <p>Cascade baseline in Python with a real ROC curve, then a learned model that must beat it.</p></div>
+          <span class="tag">Next</span></div>
+
+        <div class="ph"><span class="ph__n">03</span>
+          <div class="ph__b"><h4>On-device detection</h4>
+            <p>Free-fall IRQ â†’ gyro power-up â†’ FIFO â†’ classify. Buzzer, LED, cancel button, countdown.</p></div>
+          <span class="tag">â€”</span></div>
+
+        <div class="ph"><span class="ph__n">04</span>
+          <div class="ph__b"><h4>BLE + home hub</h4>
+            <p>GATT, bonding, store-and-forward on QSPI, retry-until-ack. Coverage survey of the real home.</p></div>
+          <span class="tag">â€”</span></div>
+
+        <div class="ph"><span class="ph__n">05</span>
+          <div class="ph__b"><h4>Cloud + escalation</h4>
+            <p>Ingest, dedup, escalation ladder, caregiver notification, heartbeat watchdog.</p></div>
+          <span class="tag">â€”</span></div>
+
+        <div class="ph"><span class="ph__n">06</span>
+          <div class="ph__b"><h4>Power, enclosure, field trial</h4>
+            <p>Optimise to S4. Wrist enclosure and strap. 14-day wear trial on a real user.</p></div>
+          <span class="tag">â€”</span></div>
+
+        <div class="ph"><span class="ph__n">07</span>
+          <div class="ph__b"><h4>Voice â€” deferred</h4>
+            <p>Post-fall audio confirmation or keyword spotting. A bench recorder already exists in <code>apps/mic_record</code>.</p></div>
+          <span class="tag">Deferred</span></div>
+      </div>
+
+      <div class="note note--brass">
+        <span class="note__t">Where the risk actually sits</span>
+        <p>Phases 1â€“2 <em>are</em> the project; everything after is comparatively mechanical. The
+          common failure mode is six weeks of elegant firmware and BLE plumbing, then discovering
+          the detector fires every time the user leans on a walking frame â€” with no dataset to
+          diagnose it against.</p>
+      </div>
+    </section>
+
+    <!-- 11 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s11" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">11</span><h2>Risks</h2></div>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Risk</th><th>Impact</th><th>Mitigation</th></tr></thead>
+          <tbody>
+            <tr><td class="k"><span class="sev sev--hi"></span>Wrist confounders</td><td>S2 unreachable</td><td>Gyro-on-demand, classifier in v1, heavy ADL corpus, cancel window</td></tr>
+            <tr><td class="k"><span class="sev sev--hi"></span>Walking frame mimics impact</td><td>Chronic false alarms in the target user</td><td>Explicit corpus category, validated separately</td></tr>
+            <tr><td class="k"><span class="sev sev--hi"></span>In-home coverage only</td><td>Outdoor fall unreported</td><td>Disclosed scope; v2 phone path needs no firmware change</td></tr>
+            <tr><td class="k"><span class="sev sev--hi"></span>Device dies or is removed</td><td>System silently useless</td><td>Cloud heartbeat watchdog (S6)</td></tr>
+            <tr><td class="k"><span class="sev sev--md"></span>Board quiescent current</td><td>Misses S4</td><td>Measure in Phase 0, before enclosure design</td></tr>
+            <tr><td class="k"><span class="sev sev--md"></span>Hub power cut / WiFi down</td><td>Whole system offline</td><td>UPS on the hub; liveness watchdog</td></tr>
+            <tr><td class="k"><span class="sev sev--md"></span>BLE dead spots</td><td>Alert undelivered where falls happen</td><td>Bathroom/bedroom survey; store-and-forward on QSPI</td></tr>
+            <tr><td class="k"><span class="sev sev--md"></span>Clipping at low full-scale</td><td>Dataset silently unusable</td><td>Â±16 g and Â±2000 dps for all collection</td></tr>
+            <tr><td class="k"><span class="sev sev--lo"></span>Slow slumps</td><td>Missed falls</td><td>Documented v1 gap, or a low-and-still detector</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Safety and regulatory</h3>
+      <p>This is a <strong>safety-adjacent</strong> device. It is not a certified medical device
+        and must not be presented as a replacement for a professionally monitored medical alert
+        system. Any real deployment needs explicit consent from the wearer, a clear statement of
+        coverage limits, and a documented fallback when the system fails.</p>
+    </section>
+
+    <!-- 12 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <section id="s12" class="view">
+      <div class="sechead">
+        <div class="bar"></div>
+        <div class="row"><span class="num">12</span><h2>Field notes</h2></div>
+      </div>
+
+      <p>Each of these cost real time. They are recorded so they only cost it once.</p>
+
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Trap</th><th>What actually happens</th></tr></thead>
+          <tbody>
+            <tr><td class="k">UF2 volume race</td><td>Windows assigns the drive letter <em>before</em> the volume accepts writes. Copying immediately fails and the board silently stays in the bootloader while the tool reports success.</td></tr>
+            <tr><td class="k">1200-baud touch â‰  UF2 mode</td><td>It enters serial-DFU-only mode with no mass-storage drive. Only a physical double-tap gives the drag-and-drop drive.</td></tr>
+            <tr><td class="k">Zephyr has no 1200-baud touch</td><td>That was the Arduino firmware's feature. Once Zephyr is flashed, <strong>RST is the only way back to the bootloader.</strong></td></tr>
+            <tr><td class="k">PDM is doubly disabled</td><td><code>pdm0</code> is <code>status = "disabled"</code> in the SoC dtsi, <em>and</em> the mic rail has no <code>regulator-boot-on</code> â€” unlike the IMU rail, which does.</td></tr>
+            <tr><td class="k">Console shares the audio port</td><td>A single <code>printk</code> mid-stream injects ASCII into the PCM. Console, logging and boot banner are all disabled in <code>mic_record</code>.</td></tr>
+            <tr><td class="k">Driver has no embedded functions</td><td>Zephyr's <code>lsm6dsl</code> driver asserts <code>SENSOR_TRIG_DATA_READY</code> â€” free-fall, wake-up and FIFO need our own register layer.</td></tr>
+            <tr><td class="k">SDK Python can't run the GUI</td><td><code>import tkinter</code> succeeds but <code>tkinter.ttk</code> fails â€” partial Tk install. Use the system Python.</td></tr>
+            <tr><td class="k">PowerShell <code>2&gt;&amp;1</code> on native exes</td><td>PS 5.1 wraps west's normal stderr progress as error records and aborts the script.</td></tr>
+            <tr><td class="k">-Pristine after config edits</td><td>Zephyr does not reliably pick up <code>prj.conf</code> or overlay changes on an incremental build.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <nav class="pager" aria-label="Section">
+      <a class="pv" href="#overview"><span>Previous</span><b></b></a>
+      <a class="nx" href="#s1"><span>Next</span><b></b></a>
+    </nav>
+
+    <footer class="foot">
+      falldetect-gkl Â· firmware handbook Â· hardware facts verified against NCS v3.1.1 and the device itself
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  /* â”€â”€ hero: accelerometer signature of a fall â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  var W = 1000, H = 280, BASE = 232, GPX = 50; /* y = BASE - g*GPX  â†’ 0..4 g */
+  var frac = function (x) { return x - Math.floor(x); };
+  var noise = function (i) { return frac(Math.sin(i * 12.9898) * 43758.5453) * 2 - 1; };
+
+  function walk(x) { return 1 + 0.13 * Math.sin(x / 13) + 0.05 * noise(x); }
+  var W300 = walk(300);
+
+  function gAt(x) {
+    if (x < 300) return walk(x);
+    if (x < 380) {                                  /* free-fall */
+      var t = (x - 300) / 80;
+      return W300 - (W300 - 0.15) * Math.sin(t * Math.PI * 0.5);
+    }
+    if (x < 440) {                                  /* impact */
+      var base = 0.15 + 0.85 * Math.min(1, (x - 380) / 60);
+      return base + 2.6 * Math.exp(-Math.pow((x - 400) / 13, 2));
+    }
+    if (x < 620) {                                  /* ring-down */
+      var u = x - 440;
+      return 1 + 0.9 * Math.exp(-u / 45) * Math.sin(u / 9);
+    }
+    return 1 + 0.02 * noise(x);                     /* stillness */
+  }
+
+  var pre = [], post = [];
+  for (var x = 0; x <= W; x += 2) {
+    var y = (BASE - gAt(x) * GPX).toFixed(1);
+    if (x <= 382) pre.push(x + ',' + y);
+    if (x >= 380 && x <= 442) post.push(x + ',' + y);
+    if (x > 440) pre.push(x + ',' + y);
+  }
+  /* pre[] holds everything except the impact burst, which is drawn in alert colour */
+
+  var bands = [
+    { a: 300, b: 380, n: '1  FREE-FALL', alt: 0 },
+    { a: 380, b: 440, n: '2  IMPACT', alt: 1 },
+    { a: 440, b: 620, n: '3  ORIENTATION', alt: 0 },
+    { a: 620, b: 1000, n: '4  STILLNESS', alt: 1 }
+  ];
+
+  var s = '';
+  for (var g = 0; g <= 4; g++) {
+    var gy = BASE - g * GPX;
+    s += '<line class="tr-grid" x1="34" y1="' + gy + '" x2="' + W + '" y2="' + gy + '"/>';
+    s += '<text class="tr-tick" x="0" y="' + (gy + 3.5) + '">' + g + ' g</text>';
+  }
+  bands.forEach(function (b) {
+    s += '<rect class="tr-band' + (b.alt ? ' alt' : '') + '" x="' + b.a + '" y="20" width="' +
+         (b.b - b.a) + '" height="' + (BASE - 20) + '"/>';
+    s += '<line class="tr-div" x1="' + b.a + '" y1="20" x2="' + b.a + '" y2="' + BASE + '"/>';
+    s += '<text class="tr-stage" x="' + (b.a + 7) + '" y="' + (BASE + 20) + '">' + b.n + '</text>';
+  });
+  s += '<polyline class="tr-line" points="' + pre.join(' ') + '"/>';
+  s += '<polyline class="tr-peak" points="' + post.join(' ') + '"/>';
+  s += '<text class="tr-tick" x="36" y="' + (BASE + 20) + '">walking</text>';
+
+  var svg = document.getElementById('sig');
+  if (svg) svg.innerHTML = s;
+
+  /* â”€â”€ tabs: one panel at a time, addressable by hash â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail a'));
+  var order = links.map(function (a) { return a.getAttribute('href').slice(1); });
+  var titles = links.map(function (a) {
+    var c = a.cloneNode(true), i = c.querySelector('i');
+    if (i) { i.parentNode.removeChild(i); }
+    return c.textContent.trim();
+  });
+  var prevEl = document.querySelector('.pager .pv');
+  var nextEl = document.querySelector('.pager .nx');
+
+  function show(id) {
+    var i = order.indexOf(id);
+    if (i < 0) { i = 0; }
+
+    order.forEach(function (vid, n) {
+      var el = document.getElementById(vid);
+      if (el) { el.classList.toggle('is-on', n === i); }
+      links[n].classList.toggle('on', n === i);
+      if (n === i) { links[n].setAttribute('aria-current', 'page'); }
+      else { links[n].removeAttribute('aria-current'); }
+    });
+
+    if (i > 0) {
+      prevEl.hidden = false;
+      prevEl.setAttribute('href', '#' + order[i - 1]);
+      prevEl.querySelector('b').textContent = titles[i - 1];
+    } else {
+      prevEl.hidden = true;
+    }
+
+    if (i < order.length - 1) {
+      nextEl.hidden = false;
+      nextEl.setAttribute('href', '#' + order[i + 1]);
+      nextEl.querySelector('b').textContent = titles[i + 1];
+    } else {
+      nextEl.hidden = true;
+    }
+
+    window.scrollTo(0, 0);
+  }
+
+  /* hashchange is the single source of truth, so deep links and the browser
+     back button both work instead of only in-page clicks. */
+  function fromHash() {
+    show((location.hash || '').replace(/^#/, '') || order[0]);
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+
+  /* â”€â”€ theme switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  var root = document.documentElement;
+  var btns = Array.prototype.slice.call(document.querySelectorAll('.theme button'));
+
+  function applyTheme(t) {
+    root.setAttribute('data-theme', t);
+    btns.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-set') === t));
+    });
+    /* Sandboxed frames can refuse storage; the toggle must still work. */
+    try { localStorage.setItem('fdg-theme', t); } catch (e) {}
+  }
+
+  var saved = null;
+  try { saved = localStorage.getItem('fdg-theme'); } catch (e) {}
+  applyTheme(saved === 'dark' ? 'dark' : 'light');
+
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      applyTheme(b.getAttribute('data-set'));
+    });
+  });
+})();
+</script>
