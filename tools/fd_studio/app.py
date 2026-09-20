@@ -127,7 +127,8 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("Tabs")
         self.tabs.setDocumentMode(True)
 
-        self.user_tab = UserTab(lambda: self.engine, lambda: self.link)
+        self.user_tab = UserTab(lambda: self.engine, lambda: self.link,
+                                self._user_alarm)
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -479,6 +480,14 @@ class MainWindow(QMainWindow):
         # tab's log, which is invisible from the User tab - a scan that fails
         # there would make the whole tool look simply dead.
         self.notify(msg)
+
+    def _user_alarm(self, on: bool) -> None:
+        """Sound or silence, on behalf of the User tab."""
+        if on:
+            self.alarm.start()
+            self.say("TEST alarm started — press I'm OK to stand it down")
+        else:
+            self.alarm.stop()
 
     def _set_firmware_version(self, ver: str) -> None:
         self.user_tab.firmware_version = ver

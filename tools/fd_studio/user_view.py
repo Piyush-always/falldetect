@@ -270,11 +270,18 @@ class ActivityBar(QWidget):
 class UserTab(QWidget):
     """Assembles the consumer view and translates Engine state into plain words."""
 
-    def __init__(self, get_engine, get_link, parent=None):
+    def __init__(self, get_engine, get_link, on_alarm=None, parent=None):
         super().__init__(parent)
+        # Called with True to sound, False to silence. Injected so this
+        # view does not own the audio device.
+        self._on_alarm = on_alarm
         self._get_engine = get_engine
         self._get_link = get_link
         self._fall_started: float | None = None
+        # Set by the Test alarm button. Runs the SAME countdown and
+        # cancel path as a real fall - a rehearsal that takes a
+        # different code path rehearses nothing.
+        self._test_fall = False
         self._cancelled_until = 0.0
         self._activity: list[float] = []
         self._last_activity_push = 0.0
@@ -310,11 +317,26 @@ class UserTab(QWidget):
         self.position = PositionPicker(self._position_changed)
         lay.addWidget(self.position)
 
+        # Recording state. The device button starts/stops a session and the
+        # only feedback was a 3 s LED on the device itself - easy to think you
+        # are recording when you are not, and lose the session.
+        self.lbl_rec = QLabel("")
+        self.lbl_rec.setObjectName("Caption")
+        self.lbl_rec.setAlignment(Qt.AlignHCenter)
+        lay.addWidget(self.lbl_rec)
+
         self.hint = QLabel("")
         self.hint.setObjectName("Caption")
         self.hint.setWordWrap(True)
         self.hint.setAlignment(Qt.AlignHCenter)
         lay.addWidget(self.hint)
+
+        # Rehearse the alarm without throwing yourself at a mattress. Anyone
+        # demoing this needs to have seen it happen once before an audience
+        # sees it.
+        self.btn_test = QPushButton("Test alarm")
+        self.btn_test.clicked.connect(self._test_alarm)
+        lay.addWidget(self.btn_test)
 
         lay.addStretch(1)
 
@@ -372,8 +394,42 @@ class UserTab(QWidget):
         # tab's recorder reads this rather than keeping a second selector.
         self.mount = key
 
+
+    def _render_alert(self, now: float) -> None:
+        """The alert screen. ONE implementation, shared by real falls and
+        rehearsals - a drill that renders through different code rehearses
+        nothing."""
+        if self._fall_started is None:
+            self._fall_started = now
+        tag = " (test)" if self._test_fall else ""
+        remaining = CANCEL_WINDOW_S - (now - self._fall_started)
+
+        if remaining <= 0:
+            self.status.set_state("Help is being called" + tag,
+                                  "No response after 30 seconds.",
+                                  "danger", True)
+            self.countdown.setVisible(False)
+            return
+
+        self.status.set_state("Possible fall" + tag,
+                              "Press I'm OK if this was not a fall.",
+                              "danger", True)
+        self.countdown.setVisible(True)
+        self.countdown.set_remaining(remaining)
+
+    def _test_alarm(self) -> None:
+        """Start a rehearsal alert. Identical path to a real one."""
+        self._test_fall = True
+        self._fall_started = time.time()
+        self._cancelled_until = 0.0
+        if self._on_alarm is not None:
+            self._on_alarm(True)
+
     def _cancel_alert(self) -> None:
         self._fall_started = None
+        self._test_fall = False
+        if self._on_alarm is not None:
+            self._on_alarm(False)
         # Suppress re-alerting on the tail of the same event. The engine's own
         # refractory window covers the detector; this covers the UI.
         self._cancelled_until = time.time() + 10.0
@@ -386,6 +442,22 @@ class UserTab(QWidget):
         now = time.time()
 
         self._update_footer(link)
+
+        # Recording strip. Shown only while recording, so it reads as a state
+        # rather than as decoration.
+        if link is not None and getattr(link, "recording", False):
+            n = link.stats().get("rec_n", 0)
+            self.lbl_rec.setText(f"● RECORDING — {n:,} samples")
+            self.lbl_rec.setStyleSheet(f"color:{T.c('danger')};")
+        else:
+            self.lbl_rec.setText("")
+
+        # A rehearsal must run with no device attached. Practising the demo
+        # should not require hardware, and the connection branches below
+        # return early - which silently made "Test alarm" do nothing.
+        if self._test_fall:
+            self._render_alert(now)
+            return
 
         if link is None:
             if self.notice:
@@ -428,23 +500,11 @@ class UserTab(QWidget):
         self.hint.setText("")
 
         # Fall takes priority over everything else on screen.
-        if engine.stage is Stage.CONFIRMED and now > self._cancelled_until:
+        if (engine.stage is Stage.CONFIRMED or self._test_fall)                 and now > self._cancelled_until:
             if self._fall_started is None:
                 self._fall_started = now
-        remaining = None
         if self._fall_started is not None:
-            remaining = CANCEL_WINDOW_S - (now - self._fall_started)
-            if remaining <= 0:
-                self.status.set_state("Help is being called",
-                                      "No response after 30 seconds.",
-                                      "danger", True)
-                self.countdown.setVisible(False)
-                return
-            self.status.set_state("Possible fall",
-                                  "Press I'm OK if this was not a fall.",
-                                  "danger", True)
-            self.countdown.setVisible(True)
-            self.countdown.set_remaining(remaining)
+            self._render_alert(now)
             return
 
         self.countdown.setVisible(False)
