@@ -668,12 +668,23 @@ class MainWindow(QMainWindow):
             f"peak {int(eng.peak_mag)} mg   ·   peak tilt {eng.peak_tilt:.0f}°"
             f"   ·   heading {eng.heading:+.0f}°")
 
+        # Battery shown here as RAW millivolts, not a percentage. The divider
+        # ratio behind it is unverified (Seeed does not publish the resistor
+        # values), and a percentage would hide an arithmetic error behind a
+        # plausible-looking number. A Li-Po is 3.2-4.2 V; far outside that
+        # band means the ratio is wrong, not the cell.
+        batt = "—"
+        if self.link is not None and getattr(self.link, "battery_mv", None):
+            chg = " chg" if getattr(self.link, "charging", False) else ""
+            batt = f"{self.link.battery_mv} mV{chg}"
+
         self.lbl_metrics.setText(
             f"magnitude  {int(eng.mag):>5d} mg\n"
             f"variance   {int(eng.std):>5d} mg\n"
             f"tilt       {eng.tilt:>5.0f} °\n"
             f"steps      {eng.steps:>5d}\n"
-            f"step rate  {eng.step_rate:>5.1f} /s"
+            f"step rate  {eng.step_rate:>5.1f} /s\n"
+            f"battery    {batt}"
         )
         d = eng.dwell
         self.lbl_dwell.setText(

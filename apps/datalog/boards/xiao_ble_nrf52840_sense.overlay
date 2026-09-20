@@ -3,13 +3,29 @@
 /*
  * Battery measurement.
  *
- * CONFIDENCE: **Assumed**, not Verified. These values are the widely-published
- * community figures for the XIAO nRF52840; they are NOT stated in
- * doc/Seeed-Studio-XIAO-Series-SOM-Datasheet.pdf and the upstream board DTS
- * defines no battery node. Confirm against a multimeter before trusting any
- * percentage: a healthy Li-Po reads 3.2-4.2 V. The tool reports raw millivolts
- * next to the percentage precisely so a wrong ratio is obvious - ~1.4 V or
- * ~12 V means these resistors are wrong, not that the battery is flat.
+ * CONFIDENCE, per https://wiki.seeedstudio.com/XIAO_BLE/ :
+ *
+ *   VERIFIED  P0.31 / AIN7_BAT is the battery ADC pin.
+ *   VERIFIED  P0.14 enables the reading path and is ACTIVE LOW - the wiki
+ *             says "set P0.14 LOW (to enable the reading path)"; HIGH
+ *             disables it.
+ *   VERIFIED  P0.17 is charge status: LOW while charging, HIGH when not
+ *             charging or fully charged. Hence GPIO_ACTIVE_LOW below, so
+ *             gpio_pin_get_dt() == 1 means "charging".
+ *
+ *   STILL ASSUMED  the 1 Mohm / 510 kohm divider ratio. Seeed does NOT publish
+ *             the resistor values, and they are not in the upstream board DTS.
+ *             This is the only value that affects the reported percentage.
+ *
+ * Verify empirically rather than trusting it: the firmware reports raw
+ * millivolts next to the percentage. A working Li-Po sits at 3.2-4.2 V. If
+ * the reading lands in that band the ratio is almost certainly right; ~1.4 V
+ * (ratio applied twice, or not at all) or ~12 V means it is wrong.
+ *
+ * NOT USED HERE, but worth knowing (wiki, same page): P0.13 selects the
+ * charge current - high-impedance input or driven HIGH = 50 mA, driven LOW
+ * = 100 mA. Left alone deliberately: charge current must suit the actual
+ * cell, and picking it is a battery-safety decision, not a default.
  *
  *   P0.31 / AIN7  battery voltage, through the divider
  *   P0.14         divider enable, active LOW (kept off except when sampling,
