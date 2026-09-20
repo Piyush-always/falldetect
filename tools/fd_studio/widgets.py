@@ -321,6 +321,24 @@ class OrientationView(QWidget):
         p.drawText(QRectF(gpts[1][0] - 20, gpts[1][1], 40, 14),
                    Qt.AlignHCenter | Qt.AlignTop, "GRAVITY")
 
+        # Device axes, labelled. Without these the object's orientation is
+        # ambiguous - you can see it move but not say which way is which,
+        # which makes "is it mounted the right way round?" unanswerable.
+        # After Calibrate these sit in the canonical pose: X right, Y front,
+        # Z up.
+        axes = ((1.45, 0.0, 0.0, "X", "danger"),
+                (0.0, 1.45, 0.0, "Y", "success"),
+                (0.0, 0.0, 1.45, "Z", "accent"))
+        for ax, ay, az, name, tone in axes:
+            tip = tuple(R @ np.asarray((ax, ay, az), dtype=float))
+            seg = self._project([(0.0, 0.0, 0.0), tip], cx, cy, scale)
+            p.setPen(QPen(_col(tone), 1.6))
+            p.drawLine(QPointF(seg[0][0], seg[0][1]),
+                       QPointF(seg[1][0], seg[1][1]))
+            p.setFont(_font(T.T_MICRO))
+            p.drawText(QRectF(seg[1][0] - 8, seg[1][1] - 8, 16, 14),
+                       Qt.AlignCenter, name)
+
         verts, faces = (_box(1.0, 0.62, 0.11) if self._shape == "slab"
                         else _box(0.72, 0.72, 0.72))
         rot = [tuple(R @ np.asarray(v, dtype=float)) for v in verts]

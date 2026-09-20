@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import tokens as T
+from .alarm import Alarm
 from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
@@ -104,6 +105,7 @@ class MainWindow(QMainWindow):
         self._tick_broken = False
         self._notice = ""
         self._scanning = False
+        self.alarm = Alarm()
         self._spins: dict[str, QSpinBox] = {}
 
         self._scan = _ScanWorker()
@@ -188,7 +190,20 @@ class MainWindow(QMainWindow):
         lay.addStretch(1)
         self.lbl_ident = _label("", "MonoDim")
         lay.addWidget(self.lbl_ident)
+
+        # Connection state, top right. Previously you had to infer this from
+        # whether the button said Connect or Disconnect, which says what the
+        # button will DO, not what the link currently IS - and those differ
+        # exactly when something has gone wrong.
+        lay.addSpacing(T.S4)
+        self.lbl_conn = _label("● Not connected", "Caption")
+        self.lbl_conn.setStyleSheet(f"color:{T.c('text_3')};")
+        lay.addWidget(self.lbl_conn)
         return bar
+
+    def _set_conn_state(self, text: str, tone: str) -> None:
+        self.lbl_conn.setText(f"● {text}")
+        self.lbl_conn.setStyleSheet(f"color:{T.c(tone)};")
 
     def _sidebar(self) -> QWidget:
         side = QWidget()
@@ -517,7 +532,14 @@ class MainWindow(QMainWindow):
 
     def calibrate(self) -> None:
         if self.engine.calibrate_upright():
-            self.say("calibrated — this orientation is now 'upright'")
+            # Zero the heading as well, so the object returns to a KNOWN pose
+            # rather than to "upright, but still rotated by however much the
+            # gyro has drifted". Calibration should give one reproducible
+            # starting point: X right, Y front, Z up.
+            self.engine.reset_heading()
+            self.engine.reset_peaks()
+            self.say("calibrated — X right, Y front, Z up. "
+                     "Move now and the object follows.")
         else:
             self.say("calibration failed — stand still and upright, then retry")
 
@@ -706,6 +728,19 @@ class MainWindow(QMainWindow):
             except queue.Empty:
                 pass
 
+        # Connection state from what the link is DOING, not from what a
+        # button label says.
+        if link is None:
+            self._set_conn_state("Not connected", "text_3")
+        else:
+            st = link.stats()
+            if st["samples"] == 0:
+                self._set_conn_state("Connected, no data", "warning")
+            elif st["stale"] > 3.0:
+                self._set_conn_state(f"Stalled {int(st['stale'])}s", "danger")
+            else:
+                self._set_conn_state(f"Live · {st['rate']:.0f} Hz", "success")
+
         eng = self.engine
         now = time.time()
         falling = now < self._fall_until
@@ -821,6 +856,9 @@ class MainWindow(QMainWindow):
             self.btn_conn.setText("Connect")
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
+        elif kind == "cancel":
+            self.alarm.stop()
+            self.say("wearer cancelled the alarm (long press)")
         elif kind == "button":
             self.say("device button pressed (short) — toggling recording")
             # The device button toggles recording. This exists because you
@@ -841,8 +879,15 @@ class MainWindow(QMainWindow):
             )
             if ev.confirmed:
                 self._fall_until = time.time() + 6.0
+                # Audible, because a screen nobody is looking at is not an
+                # alert. The device cannot do this yet - no buzzer - so the
+                # laptop stands in. Say that out loud when demoing.
+                self.alarm.start()
+                if not self.alarm.available:
+                    self.say("(no audible alarm on this platform)")
 
     def closeEvent(self, e):
+        self.alarm.stop()
         if self.link:
             if self.link.recording:
                 self.link.stop_recording()

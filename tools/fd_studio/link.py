@@ -149,6 +149,9 @@ class LinkBase:
                 self.battery_pct = int(p[1])
                 self.battery_mv = int(p[2])
                 self.charging = p[3] == "1"
+            elif p[0] == "$C" and len(p) == 2:
+                # Wearer long-pressed to stand the alarm down.
+                self.events.put(("cancel", int(p[1])))
             elif p[0] == "$B" and len(p) == 3:
                 # Cancel button. Surfaced as an event so the alert flow can
                 # consume it later without polling.
