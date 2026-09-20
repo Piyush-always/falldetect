@@ -8,7 +8,7 @@
 # before and after an update, and "what is actually installed?" becomes
 # unanswerable - which is exactly the state this project was in.
 VERSION_MAJOR = 0
-VERSION_MINOR = 6
+VERSION_MINOR = 7
 PATCHLEVEL = 0
 VERSION_TWEAK = 0
 EXTRAVERSION =

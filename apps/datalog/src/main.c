@@ -9,7 +9,9 @@
  * Wire format, one line per sample:
  *     $D,<seq>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>
  *     $P,<seq>,<steps>          hardware step counter, 1 Hz
- *     $B,<seq>,<count>          cancel button pressed (D10/P1.15)
+ *     $B,<seq>,<count>          short press - recording toggle
+ *     $C,<seq>                  long press - alarm cancelled by wearer
+ * Host -> device (NUS RX): 'A' pre-alert, 'F' alarm, 'C' clear
  *     $V,<pct>,<mv>,<charging>  battery, 1 Hz (mv is raw - see overlay)
  *     $I,<odr>,<accel_fs_g>,<gyro_fs_dps>   identity, on connect
  *
@@ -100,7 +102,6 @@ static const struct gpio_dt_spec led_b = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios)
 
 /* Cancel button: D10 / P1.15, shorted to GND when pressed. See the overlay. */
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
-static struct gpio_callback button_cb;
 
 static uint8_t tx_storage[TX_BUF_BYTES];
 static struct ring_buf tx_rb;
@@ -121,9 +122,38 @@ static uint32_t ble_dropped;
 #define BLE_TX_PRIO   7        /* below the sensor trigger thread (5) */
 #define BLE_MAX_WAIT_MS 20U    /* cap on how long a partial chunk waits */
 
-/* Cancel button. WHITE_MS is what the wearer sees as acknowledgement. */
-#define BUTTON_DEBOUNCE_MS 200
+/*
+ * Cancel button, polled in the 100 ms loop rather than driven by an edge ISR:
+ * telling a short press from a long one needs the press DURATION, which an
+ * edge interrupt does not carry. Polling gets it for free and removes the ISR
+ * and its debounce entirely.
+ *
+ * LONG press stands an alarm down. Chosen over a double-tap because it needs
+ * no timing precision - the wearer just holds it - and the person using this
+ * may be shaken. It is still deliberate, so knocking the device against
+ * furniture cannot silence a real alarm.
+ */
+#define BUTTON_LONG_TICKS  15   /* 1.5 s at TICK_MS */
 #define BUTTON_WHITE_MS    3000
+
+/*
+ * Alert indication. The LED is NOT the wearer's alarm - a pendant sits on the
+ * chest and someone lying on the floor cannot see it. This is honest feedback
+ * for an observer, and a preview of the real flow, until a buzzer exists.
+ * See PROJECT_OUTLINE.md section 6.
+ *
+ * Blink periods in 100 ms ticks. Slow = "about to alarm, you can still stop
+ * it"; fast = "alarming now". The rate is the message, so they are far enough
+ * apart to tell apart across a room.
+ */
+#define ALERT_PRE_TICKS    5    /* red, 500 ms on / 500 ms off */
+#define ALERT_ALARM_TICKS  1    /* red, 100 ms on / 100 ms off */
+
+enum alert_state {
+	ALERT_IDLE = 0,   /* dark: nothing wrong, nothing to show */
+	ALERT_PRE,        /* slow red: cancel window open */
+	ALERT_ALARM,      /* fast red: alarm active */
+};
 #define TICK_MS            100   /* loop period; also the button response time */
 #define TICKS_PER_SEC      (1000 / TICK_MS)
 
@@ -140,16 +170,22 @@ static K_MUTEX_DEFINE(ble_lock);
 static struct bt_conn *nus_conn;
 
 /*
- * Raised by the button ISR, consumed by the sample loop. Atomic because a
- * plain flag can lose a press in the window between test and clear, and the
- * whole point of a cancel button is that it is never missed.
- *
- * The LED has exactly ONE writer - the main loop. The ISR only raises this.
+ * The LED has exactly ONE writer: the sample loop. Nothing else touches it.
  * Letting two contexts drive the LEDs directly is what made the status LED
  * flash for a fraction of a second in src/main.c; do not repeat it here.
  */
-static atomic_t button_pressed;
 static uint32_t button_count;
+
+/*
+ * Set from the NUS RX callback (Bluetooth host context), read by the sample
+ * loop. The HOST owns detection and the countdown; the device owns the
+ * physical indication and the cancel input. Keeping the split that way means
+ * thresholds stay tunable on the PC without a reflash.
+ *
+ * atomic because the two run on different contexts and a lost alarm command
+ * is exactly the failure this device exists to avoid.
+ */
+static atomic_t alert_state = ATOMIC_INIT(ALERT_IDLE);
 
 /* --- UART TX -------------------------------------------------------------- */
 
@@ -320,32 +356,48 @@ static void ble_tx_thread(void *a, void *b, void *c)
 K_THREAD_DEFINE(ble_tx_tid, BLE_TX_STACK, ble_tx_thread, NULL, NULL, NULL,
 		BLE_TX_PRIO, 0, 0);
 
-/* --- cancel button -------------------------------------------------------- */
+/* --- alert commands from the host ----------------------------------------- */
 
 /*
- * ISR context. Does the minimum: debounce by timestamp and raise a flag.
- * No LED writes, no BLE, no logging - all of that happens in the sample loop.
+ * Single-byte commands written to the NUS RX characteristic:
+ *
+ *   'A'  pre-alert  - a fall is suspected, the cancel window is open
+ *   'F'  alarm      - the window expired, this is now a real alert
+ *   'C'  clear      - stand down, back to normal
+ *
+ * Deliberately one byte: this path exists so the HOST can drive the
+ * indication, not as a general command channel. Anything richer belongs in a
+ * proper GATT service with its own characteristics.
+ *
+ * Execution context: Bluetooth host context. Sets an atomic and returns -
+ * no LED writes here, because the sample loop is the only LED writer.
  */
-static void button_isr(const struct device *port, struct gpio_callback *cb,
-		       gpio_port_pins_t pins)
+static void nus_received(struct bt_conn *conn, const uint8_t *const data,
+			 uint16_t len)
 {
-	static int64_t last_ms;
-	int64_t now = k_uptime_get();
+	ARG_UNUSED(conn);
 
-	ARG_UNUSED(port);
-	ARG_UNUSED(cb);
-	ARG_UNUSED(pins);
-
-	/* A bare mechanical switch bounces for a few ms; without this one
-	 * press registers as several.
-	 */
-	if ((now - last_ms) < BUTTON_DEBOUNCE_MS) {
-		return;
+	for (uint16_t i = 0; i < len; i++) {
+		switch (data[i]) {
+		case 'A':
+			atomic_set(&alert_state, ALERT_PRE);
+			break;
+		case 'F':
+			atomic_set(&alert_state, ALERT_ALARM);
+			break;
+		case 'C':
+			atomic_set(&alert_state, ALERT_IDLE);
+			break;
+		default:
+			/* Unknown byte: ignored rather than guessed at. */
+			break;
+		}
 	}
-	last_ms = now;
-
-	atomic_set(&button_pressed, 1);
 }
+
+static struct bt_nus_cb nus_callbacks = {
+	.received = nus_received,
+};
 
 /* --- unit conversion ------------------------------------------------------ */
 
@@ -696,12 +748,12 @@ int main(void)
 	 */
 	(void)bt_enable(bt_ready);
 	/*
-	 * No RX callback needed yet - nothing sends commands to this rig over
-	 * BLE today. NUS's GATT service is registered statically at link time
-	 * (BT_GATT_SERVICE_DEFINE in nus.c); this call only wires up callbacks,
-	 * so it does not need to wait for bt_ready().
+	 * The RX callback is how the host drives the alert indication ('A'
+	 * pre-alert, 'F' alarm, 'C' clear). NUS's GATT service is registered
+	 * statically at link time (BT_GATT_SERVICE_DEFINE in nus.c); this call
+	 * only wires up callbacks, so it need not wait for bt_ready().
 	 */
-	(void)bt_nus_init(NULL);
+	(void)bt_nus_init(&nus_callbacks);
 
 	ring_buf_init(&tx_rb, sizeof(tx_storage), tx_storage);
 	ring_buf_init(&ble_rb, sizeof(ble_storage), ble_storage);
@@ -714,16 +766,12 @@ int main(void)
 	}
 
 	/*
-	 * Cancel button. Edge-triggered on the press (pin going active), not on
-	 * release, so the acknowledgement is immediate rather than on let-go.
+	 * Cancel button. Input only - it is polled in the sample loop, because
+	 * telling a short press from a long one needs the press duration and an
+	 * edge interrupt does not carry it.
 	 */
 	if (gpio_is_ready_dt(&button)) {
-		if (gpio_pin_configure_dt(&button, GPIO_INPUT) == 0 &&
-		    gpio_pin_interrupt_configure_dt(&button,
-						    GPIO_INT_EDGE_TO_ACTIVE) == 0) {
-			gpio_init_callback(&button_cb, button_isr, BIT(button.pin));
-			(void)gpio_add_callback(button.port, &button_cb);
-		}
+		(void)gpio_pin_configure_dt(&button, GPIO_INPUT);
 	}
 
 	if (!device_is_ready(cdc) || !device_is_ready(imu)) {
@@ -791,12 +839,12 @@ int main(void)
 
 	uint32_t tick = 0U;
 	uint32_t white_ticks = 0U;
-	bool heartbeat = false;
+	uint32_t held_ticks = 0U;
 
 	/*
 	 * 100 ms rather than 500 ms: this loop is the ONLY writer of the LEDs,
 	 * so its period is also the button's response time, and half a second
-	 * to acknowledge a press feels broken. The pedometer and heartbeat are
+	 * to acknowledge a press feels broken. The pedometer poll is
 	 * decimated back to 1 Hz so fd_studio's step-rate calculation, which
 	 * assumes ~1 Hz $P lines, is unaffected.
 	 */
@@ -806,34 +854,91 @@ int main(void)
 		k_sleep(K_MSEC(TICK_MS));
 		tick++;
 
-		/* --- button ------------------------------------------------ */
-		if (atomic_cas(&button_pressed, 1, 0)) {
-			white_ticks = BUTTON_WHITE_MS / TICK_MS;
-			button_count++;
+		/* --- button: polled, so press DURATION is available --------- */
+		{
+			int alert = (int)atomic_get(&alert_state);
+			bool down = gpio_is_ready_dt(&button) &&
+				    gpio_pin_get_dt(&button) == 1;
 
-			/* Tell the host. This is the hook the 30 s cancel flow
-			 * will hang off once the alert state machine exists.
-			 */
-			n = snprintk(line, sizeof(line), "$B,%u,%u\n", seq, button_count);
-			if (n > 0) {
-				tx_line(line, (size_t)n);
-				ble_tx_line(line, (size_t)n);
+			if (down) {
+				held_ticks++;
+				/* Acknowledge the moment the long press is
+				 * reached rather than on release - holding a
+				 * button with no feedback feels broken, and a
+				 * frightened person will let go early.
+				 */
+				if (held_ticks == BUTTON_LONG_TICKS &&
+				    alert != ALERT_IDLE) {
+					atomic_set(&alert_state, ALERT_IDLE);
+					white_ticks = BUTTON_WHITE_MS / TICK_MS;
+					n = snprintk(line, sizeof(line),
+						     "$C,%u\n", seq);
+					if (n > 0) {
+						tx_line(line, (size_t)n);
+						ble_tx_line(line, (size_t)n);
+					}
+				}
+			} else if (held_ticks > 0U) {
+				/* Released. A short press is the recording
+				 * toggle; during an alert it does nothing, so
+				 * a knock cannot stand a real alarm down.
+				 */
+				if (held_ticks < BUTTON_LONG_TICKS &&
+				    alert == ALERT_IDLE) {
+					white_ticks = BUTTON_WHITE_MS / TICK_MS;
+					button_count++;
+					n = snprintk(line, sizeof(line),
+						     "$B,%u,%u\n", seq, button_count);
+					if (n > 0) {
+						tx_line(line, (size_t)n);
+						ble_tx_line(line, (size_t)n);
+					}
+				}
+				held_ticks = 0U;
 			}
 		}
 
 		/* --- LEDs: single owner, strict priority -------------------- */
-		if (white_ticks > 0U) {
-			white_ticks--;
-			/* White = all three channels. Acknowledges the press. */
-			(void)gpio_pin_set_dt(&led_r, 1);
-			(void)gpio_pin_set_dt(&led_g, 1);
-			(void)gpio_pin_set_dt(&led_b, 1);
-		} else if ((tick % TICKS_PER_SEC) == 0U) {
-			/* Blue heartbeat: the rig is streaming. */
-			heartbeat = !heartbeat;
-			(void)gpio_pin_set_dt(&led_r, 0);
-			(void)gpio_pin_set_dt(&led_g, 0);
-			(void)gpio_pin_set_dt(&led_b, heartbeat);
+		{
+			int alert = (int)atomic_get(&alert_state);
+
+			if (alert != ALERT_IDLE) {
+				/* Alert outranks everything, including the
+				 * cancel acknowledgement - the alarm must not
+				 * be maskable by an unrelated press.
+				 */
+				uint32_t period = (alert == ALERT_ALARM)
+						  ? ALERT_ALARM_TICKS
+						  : ALERT_PRE_TICKS;
+				bool on = ((tick / period) % 2U) == 0U;
+
+				(void)gpio_pin_set_dt(&led_r, on);
+				(void)gpio_pin_set_dt(&led_g, 0);
+				(void)gpio_pin_set_dt(&led_b, 0);
+			} else if (white_ticks > 0U) {
+				white_ticks--;
+				/* White = all three channels: press understood. */
+				(void)gpio_pin_set_dt(&led_r, 1);
+				(void)gpio_pin_set_dt(&led_g, 1);
+				(void)gpio_pin_set_dt(&led_b, 1);
+			} else {
+				/*
+				 * Idle is DARK, not a heartbeat. A pendant worn
+				 * on the chest all day should not strobe, and an
+				 * always-on indicator is the thing a wearer
+				 * stops noticing - so it cannot carry meaning.
+				 * Dark also makes the short press worth
+				 * something: tap it and white for 3 s answers
+				 * "is this thing alive?".
+				 *
+				 * Costs a little: you cannot tell "streaming"
+				 * from "powered but idle" by looking. The host
+				 * shows that, and the wearer does not care.
+				 */
+				(void)gpio_pin_set_dt(&led_r, 0);
+				(void)gpio_pin_set_dt(&led_g, 0);
+				(void)gpio_pin_set_dt(&led_b, 0);
+			}
 		}
 
 		/* --- pedometer, once per second ----------------------------- */
