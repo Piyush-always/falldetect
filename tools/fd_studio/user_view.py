@@ -110,8 +110,16 @@ class BigStatus(QWidget):
         p.drawEllipse(QRectF(cx - dot_r, r.top() + 34 - dot_r, dot_r * 2, dot_r * 2))
 
         p.setPen(QPen(tone))
-        p.setFont(_font(34, 650))
-        title_rect = QRectF(r.left(), r.top() + 58, r.width(), 46)
+        # Shrink to fit rather than clip. "Set up needed" and "Help is being
+        # called" overflowed at 34px and were cut off mid-word at both edges -
+        # on the one element whose whole job is to be readable instantly.
+        title_rect = QRectF(r.left() + 12, r.top() + 58, r.width() - 24, 46)
+        size = 34
+        while size > 18:
+            p.setFont(_font(size, 650))
+            if p.fontMetrics().horizontalAdvance(self._title) <= title_rect.width():
+                break
+            size -= 2
         p.drawText(title_rect, Qt.AlignHCenter | Qt.AlignVCenter, self._title)
 
         p.setPen(QPen(_col("text_2")))
@@ -275,6 +283,8 @@ class UserTab(QWidget):
         # Called with True to sound, False to silence. Injected so this
         # view does not own the audio device.
         self._on_alarm = on_alarm
+        # Lets the button label reflect reality rather than guess.
+        self._is_sounding = None
         self._get_engine = get_engine
         self._get_link = get_link
         self._fall_started: float | None = None
@@ -418,7 +428,16 @@ class UserTab(QWidget):
         self.countdown.set_remaining(remaining)
 
     def _test_alarm(self) -> None:
-        """Start a rehearsal alert. Identical path to a real one."""
+        """Start a rehearsal alert - or stop one already sounding.
+
+        Doubles as a stop because an alarm with no visible way to silence it
+        is a fault, not a feature. "I'm OK" only appears during the alert
+        screen; this button is always on the page.
+        """
+        if self._test_fall or (self._is_sounding is not None
+                               and self._is_sounding()):
+            self._cancel_alert()
+            return
         self._test_fall = True
         self._fall_started = time.time()
         self._cancelled_until = 0.0
@@ -445,6 +464,10 @@ class UserTab(QWidget):
 
         # Recording strip. Shown only while recording, so it reads as a state
         # rather than as decoration.
+        sounding = self._is_sounding() if self._is_sounding else False
+        self.btn_test.setText("Stop alarm" if (sounding or self._test_fall)
+                              else "Test alarm")
+
         if link is not None and getattr(link, "recording", False):
             n = link.stats().get("rec_n", 0)
             self.lbl_rec.setText(f"● RECORDING — {n:,} samples")

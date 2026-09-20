@@ -456,6 +456,18 @@ class Engine:
             # falls where the wearer keeps moving, or lands upright-ish.
             confirmed = impact and (orientation or stillness)
 
+        # Never confirm without a gravity reference. Uncalibrated, tilt is
+        # permanently 0, so the orientation stage cannot fire and the verdict
+        # collapses to "impact, then stillness" - which is what putting the
+        # device down on a table looks like. That produced a sounding alarm on
+        # a screen that was simultaneously saying "Set up needed", with no
+        # visible way to silence it.
+        #
+        # The candidate is still recorded, so the Debug log shows what was seen
+        # and why it was not acted on.
+        if confirmed and not self.calibrated:
+            confirmed = False
+
         if confirmed:
             self._set_flags(orientation=orientation, stillness=stillness)
             self.stage = Stage.CONFIRMED

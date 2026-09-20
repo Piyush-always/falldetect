@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
 
         self.user_tab = UserTab(lambda: self.engine, lambda: self.link,
                                 self._user_alarm)
+        self.user_tab._is_sounding = lambda: self.alarm.sounding
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -886,7 +887,7 @@ class MainWindow(QMainWindow):
                 f"tilt {ev.tilt_before:.0f}°→{ev.tilt_after:.0f}°, "
                 f"still σ {ev.still_std:.0f} mg — {ev.reason()}"
             )
-            if ev.confirmed:
+            if ev.confirmed and self.engine.calibrated:
                 self._fall_until = time.time() + 6.0
                 # Audible, because a screen nobody is looking at is not an
                 # alert. The device cannot do this yet - no buzzer - so the
