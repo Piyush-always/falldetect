@@ -30,6 +30,7 @@ from . import tokens as T
 from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
+from .log_view import LogTab
 from .ota_view import OtaTab
 from .replay import replay_corpus, summarize
 from .user_view import UserTab
@@ -139,6 +140,12 @@ class MainWindow(QMainWindow):
         self.ota_tab = OtaTab(self._ota_target, self._disconnect_for_update,
                               self._set_firmware_version)
         self.tabs.addTab(self.ota_tab, "Update")
+
+        # Last tab: what the TOOL is doing, as opposed to what the detector
+        # saw. When a connection misbehaves this is where you look, and it
+        # should not be buried inside a tab about detection.
+        self.log_tab = LogTab()
+        self.tabs.addTab(self.log_tab, "Log")
 
         outer.addWidget(self.tabs, 1)
         outer.addWidget(self._status())
@@ -439,6 +446,9 @@ class MainWindow(QMainWindow):
 
         if found:
             self.notify("")
+            self.say(f"scan found {len(devices)} device(s); "
+                     f"{sum(1 for d in devices if d[0].startswith('falldetect'))} "
+                     "falldetect")
         elif devices:
             self.notify("No falldetect device nearby. Check it is powered, in "
                         "range, and running a build with BLE telemetry.")
@@ -497,6 +507,7 @@ class MainWindow(QMainWindow):
         if not is_board:
             self.say(f"WARNING '{name}' does not look like a falldetect device — "
                      "expect no data.")
+        self.say(f"connecting to '{name}'...")
         self.engine = Engine(thresholds=self.engine.th)
         self.link = BleDeviceLink(name, self.engine)
         self.link.start()
@@ -650,7 +661,16 @@ class MainWindow(QMainWindow):
             self.say(f"saved {path.name} — {n} samples")
 
     def say(self, msg: str) -> None:
+        """One message, two places.
+
+        The Debug pane keeps an inline feed next to the traces it explains;
+        the Log tab keeps the full session history, copyable and saveable.
+        Routing both through here means a message can never appear in one and
+        not the other.
+        """
         self.log.appendPlainText(f"{time.strftime('%H:%M:%S')}  {msg}")
+        if getattr(self, "log_tab", None) is not None:
+            self.log_tab.append(msg)
 
     # ── tick ─────────────────────────────────────────────────────────────────
     def _tick(self) -> None:
@@ -672,6 +692,12 @@ class MainWindow(QMainWindow):
         # the timer callback permanently. Reflashing while connected does
         # exactly that, because the board re-enumerates under the open port.
         link = self.link
+        if link is not None and getattr(link, "battery_mv", None)                 and not getattr(self, "_batt_logged", False):
+            self._batt_logged = True
+            # Logged once: the divider ratio behind this is unverified, so the
+            # raw figure belongs in any log someone pastes for diagnosis.
+            self.say(f"battery {link.battery_pct}% ({link.battery_mv} mV"
+                     + (", charging" if link.charging else "") + ")")
         if link is not None:
             try:
                 while True:
@@ -796,6 +822,7 @@ class MainWindow(QMainWindow):
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
         elif kind == "button":
+            self.say("device button pressed (short) — toggling recording")
             # The device button toggles recording. This exists because you
             # cannot reach the laptop while falling onto a mattress, and a
             # session that starts late or stops early is a session with the
