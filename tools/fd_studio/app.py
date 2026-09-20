@@ -22,7 +22,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QPlainTextEdit, QPushButton, QScrollArea,
+    QInputDialog, QLineEdit, QMainWindow, QPlainTextEdit, QPushButton,
+    QScrollArea,
     QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -64,6 +65,19 @@ TUNABLES = [
     ("lying_min_deg", "Lying above", "deg", 40, 90),
     ("motion_std_mg", "Moving above", "mg", 20, 400),
 ]
+
+
+def _safe_label(text: str) -> str:
+    """Make a typed label safe to use as a directory and file name.
+
+    The label is free text from a dialog and goes straight into a path, so
+    separators and the Windows-reserved characters have to go. Collapsing
+    spaces to underscores also keeps the corpus greppable.
+    """
+    cleaned = "".join("_" if c in ' \t/\\:*?"<>|' else c
+                      for c in text.strip())
+    cleaned = cleaned.strip("._")
+    return cleaned[:48]
 
 
 def _label(text: str, obj: str = "") -> QLabel:
@@ -131,7 +145,8 @@ class MainWindow(QMainWindow):
         self.tabs.setDocumentMode(True)
 
         self.user_tab = UserTab(lambda: self.engine, lambda: self.link,
-                                self._user_alarm)
+                                self._user_alarm,
+                                self.toggle_user_recording)
         self.user_tab._is_sounding = lambda: self.alarm.sounding
         self.tabs.addTab(self.user_tab, "User")
 
@@ -754,6 +769,116 @@ class MainWindow(QMainWindow):
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(DATA_DIR))  # noqa: S606 - user-initiated
 
+    # ── recording from the User tab: name it afterwards ──────────────────────
+    #
+    # The Debug tab picks a label BEFORE recording, which suits bench work
+    # where you set up one condition and run it. It suits data collection
+    # badly: you are across the room wearing the thing, and what the session
+    # actually contains is only known once it is over. So this path writes to
+    # a staging file and asks on stop.
+
+    STAGING_DIR = "_unsorted"
+
+    def toggle_user_recording(self, start: bool) -> None:
+        """Record/Stop from the User tab and from the device's own button."""
+        if not self.link:
+            self.say("connect to the device before recording")
+            return
+        if start:
+            if self.link.recording:
+                return
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = DATA_DIR / self.STAGING_DIR / f"{stamp}_recording.csv"
+            header = [
+                "falldetect-gkl fd_studio v1",
+                "label=?",                      # rewritten when it is named
+                f"mount={self.in_mount.currentText()}",
+                f"subject={self.in_subject.text().strip() or 'anon'}",
+                f"started={datetime.now().isoformat(timespec='seconds')}",
+                "units=accel milli-g, gyro deci-dps",
+                f"firmware={self.link.identity or 'unknown'}",
+                "notes=",
+            ]
+            self.link.start_recording(path, header)
+            self.btn_rec.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.say("recording — press Stop when the activity is done")
+            return
+
+        path, n = self.link.stop_recording()
+        self.btn_rec.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        if path is None:
+            return
+        self._name_and_file(path, n)
+
+    def _name_and_file(self, staged: Path, n: int) -> None:
+        """Ask what that was, then file it under the answer."""
+        if n == 0:
+            self.say(f"WARNING recorded 0 samples — device sent nothing. "
+                     f"Kept the empty file at {staged.name} so the failure is "
+                     f"visible rather than silent.")
+            return
+
+        secs = n / 208.0
+        label, ok = QInputDialog.getItem(
+            self, "Name this recording",
+            f"Recorded {n:,} samples ({secs:.0f} seconds).\n\n"
+            f"What was it? Pick one, or type your own:",
+            LABELS, 0, True)
+
+        label = _safe_label(label) if ok else ""
+        if not label:
+            # Dismissing a dialog must never destroy a recording. A fall you
+            # just took cannot be re-taken because you hit Escape.
+            label = "unlabelled"
+            self.say("not named — filed as 'unlabelled', rename it later")
+
+        try:
+            final = self._file_recording(staged, label)
+        except OSError as exc:
+            self.say(f"ERROR could not file the recording: {exc}. "
+                     f"It is still at {staged}")
+            return
+        # Shortening the path is cosmetic; the file is already on disk here.
+        # relative_to() raises for anything outside ROOT, and a successful
+        # save must never be reported as a failure because of a display nicety.
+        try:
+            shown = final.relative_to(ROOT)
+        except ValueError:
+            shown = final
+        self.say(f"saved {shown} — {n:,} samples "
+                 f"({secs:.0f}s), labelled '{label}'")
+
+    def _file_recording(self, staged: Path, label: str) -> Path:
+        """Move the staged file to its labelled home, fixing the header.
+
+        Copied line by line rather than read-all/write-all: a long session is
+        hundreds of thousands of rows, and there is no reason to hold it all
+        in memory just to change one header line.
+        """
+        mount = self.in_mount.currentText()
+        subject = self.in_subject.text().strip() or "anon"
+        stamp = staged.stem.split("_recording")[0]
+
+        dest_dir = DATA_DIR / mount / label
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / f"{stamp}_{subject}_{label}.csv"
+        n = 2
+        while dest.exists():   # same second, same label - keep both
+            dest = dest_dir / f"{stamp}_{subject}_{label}_{n}.csv"
+            n += 1
+
+        with open(staged, "r", newline="", encoding="ascii") as src, \
+             open(dest, "w", newline="", encoding="ascii") as out:
+            for line in src:
+                if line.startswith("# label="):
+                    out.write(f"# label={label}\n")
+                else:
+                    out.write(line)
+        staged.unlink()
+        return dest
+
     def start_recording(self) -> None:
         if not self.link:
             return
@@ -969,10 +1094,8 @@ class MainWindow(QMainWindow):
             # cannot reach the laptop while falling onto a mattress, and a
             # session that starts late or stops early is a session with the
             # interesting part missing.
-            if self.link is not None and self.link.recording:
-                self.stop_recording()
-            else:
-                self.start_recording()
+            if self.link is not None:
+                self.toggle_user_recording(not self.link.recording)
         elif kind == "fall":
             ev = payload
             tag = "FALL" if ev.confirmed else "candidate"

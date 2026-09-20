@@ -278,11 +278,15 @@ class ActivityBar(QWidget):
 class UserTab(QWidget):
     """Assembles the consumer view and translates Engine state into plain words."""
 
-    def __init__(self, get_engine, get_link, on_alarm=None, parent=None):
+    def __init__(self, get_engine, get_link, on_alarm=None,
+                 on_record=None, parent=None):
         super().__init__(parent)
         # Called with True to sound, False to silence. Injected so this
         # view does not own the audio device.
         self._on_alarm = on_alarm
+        # Called with True to start recording, False to stop. Injected for
+        # the same reason: this view owns no files.
+        self._on_record = on_record
         # Lets the button label reflect reality rather than guess.
         self._is_sounding = None
         # Message shown while a guided calibration hold is running, else
@@ -344,6 +348,20 @@ class UserTab(QWidget):
         self.hint.setAlignment(Qt.AlignHCenter)
         lay.addWidget(self.hint)
 
+        # Recording, from the tab you are actually looking at while wearing
+        # the device. One button, because "which of Record and Stop is live
+        # right now" is a question the button itself should answer.
+        #
+        # Naming happens on STOP, not before: standing at the laptop choosing
+        # a label before you go and fall over gets the label wrong, because
+        # what you actually did is only known afterwards.
+        self.btn_record = QPushButton("Start recording")
+        self.btn_record.setObjectName("Primary")
+        self.btn_record.setMinimumHeight(48)
+        self.btn_record.setEnabled(False)
+        self.btn_record.clicked.connect(self._record_clicked)
+        lay.addWidget(self.btn_record)
+
         # Rehearse the alarm without throwing yourself at a mattress. Anyone
         # demoing this needs to have seen it happen once before an audience
         # sees it.
@@ -376,26 +394,44 @@ class UserTab(QWidget):
 
     def _update_footer(self, link) -> None:
         """Battery and firmware version. Plain words, no jargon."""
-        if link is None or getattr(link, "battery_pct", None) is None:
-            self.lbl_batt.setText("—")
+        tone = "text_3"
+        if link is None:
+            text = "Battery —"
+        elif getattr(link, "battery_pct", None) is None:
+            # NOT the same as "no battery support". The firmware has sent
+            # $V since 0.6.0, so silence here means the device's ADC read is
+            # failing (it only transmits when mv > 0) or the line is not
+            # reaching us. Saying "—" made those indistinguishable from the
+            # feature being missing, which is the wrong conclusion to invite.
+            text = "Battery — no reading from device yet"
+            tone = "warning"
         else:
             pct = link.battery_pct
             mv = getattr(link, "battery_mv", None)
             if getattr(link, "charging", False):
-                text = f"Charging · {pct}%"
+                text, tone = f"Charging · {pct}%", "success"
             elif pct <= 15:
-                text = f"Battery low · {pct}%"
+                text, tone = f"Battery low · {pct}%", "danger"
             else:
-                text = f"Battery {pct}%"
+                text, tone = f"Battery {pct}%", "text_2"
             # A Li-Po outside 3.0-4.3 V means the divider constants are wrong,
             # not that the cell is odd. Surface it rather than show a
             # confident-looking percentage derived from a bad ratio.
             if mv is not None and not (3000 <= mv <= 4300):
-                text += f"  (reading {mv} mV - check divider)"
-            self.lbl_batt.setText(text)
+                text += f"  ({mv} mV — check divider)"
+                tone = "warning"
+        self.lbl_batt.setText(text)
+        self.lbl_batt.setStyleSheet(f"color:{T.c(tone)};")
 
         ver = getattr(self, "firmware_version", "")
         self.lbl_fw.setText(f"Firmware {ver}" if ver else "")
+
+    def _record_clicked(self) -> None:
+        if self._on_record is None:
+            return
+        link = self._get_link()
+        self._on_record(not (link is not None
+                             and getattr(link, "recording", False)))
 
     def _caption(self, text: str) -> QLabel:
         lab = QLabel(text)
@@ -471,12 +507,20 @@ class UserTab(QWidget):
         self.btn_test.setText("Stop alarm" if (sounding or self._test_fall)
                               else "Test alarm")
 
-        if link is not None and getattr(link, "recording", False):
+        rec = link is not None and getattr(link, "recording", False)
+        if rec:
             n = link.stats().get("rec_n", 0)
-            self.lbl_rec.setText(f"● RECORDING — {n:,} samples")
+            self.lbl_rec.setText(f"● RECORDING — {n:,} samples "
+                                 f"({n / 208.0:.0f}s)")
             self.lbl_rec.setStyleSheet(f"color:{T.c('danger')};")
         else:
             self.lbl_rec.setText("")
+
+        # The button states what pressing it will DO, and is dead without a
+        # device, because a Record button that silently records nothing is
+        # how a session gets lost.
+        self.btn_record.setEnabled(link is not None)
+        self.btn_record.setText("Stop and save" if rec else "Start recording")
 
         # A rehearsal must run with no device attached. Practising the demo
         # should not require hardware, and the connection branches below

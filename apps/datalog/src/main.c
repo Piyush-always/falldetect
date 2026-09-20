@@ -534,6 +534,12 @@ static const struct gpio_dt_spec vbatt_power =
 
 static bool vbatt_ready;
 
+/*
+ * Last battery-read error reported, so a persistent failure is announced once
+ * rather than every second. Written only by the sample loop.
+ */
+static int batt_err_last;
+
 static int battery_mv(void)
 {
 	int32_t sample = 0;
@@ -978,7 +984,26 @@ int main(void)
 		{
 			int mv = battery_mv();
 
+			/*
+			 * A failed read used to send NOTHING. The host then showed
+			 * no battery for ever, which is indistinguishable from the
+			 * feature not existing - and that is the conclusion it
+			 * actually led to. Report the errno instead, once per
+			 * distinct error rather than at 1 Hz, so a broken ADC is
+			 * visible without burying the log.
+			 */
+			if (mv <= 0 && mv != batt_err_last) {
+				batt_err_last = mv;
+				n = snprintk(line, sizeof(line),
+					     "$X,battery-read %d\n", mv);
+				if (n > 0) {
+					tx_line(line, (size_t)n);
+					ble_tx_line(line, (size_t)n);
+				}
+			}
+
 			if (mv > 0) {
+				batt_err_last = 0;
 				uint8_t pct = battery_percent(mv);
 				bool chg = battery_charging();
 
