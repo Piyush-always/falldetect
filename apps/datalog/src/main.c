@@ -13,6 +13,7 @@
  *     $C,<seq>                  long press - alarm cancelled by wearer
  * Host -> device (NUS RX): 'A' pre-alert, 'F' alarm, 'C' clear
  *     $V,<pct>,<mv>,<charging>  battery, 1 Hz (mv is raw - see overlay)
+ *     $S,<subscribed>,<usb_drops>,<ble_drops>   status, 1 Hz
  *     $I,<odr>,<accel_fs_g>,<gyro_fs_dps>   identity, on connect
  *
  * <seq> increments once per sample and is the whole point: it is how the host
@@ -170,6 +171,23 @@ static K_MUTEX_DEFINE(ble_lock);
 static struct bt_conn *nus_conn;
 
 /*
+ * Whether a client has actually enabled notifications on the NUS TX
+ * characteristic. This is NOT the same as being connected, and conflating the
+ * two cost real debugging time:
+ *
+ * bt_nus_send() calls bt_gatt_is_subscribed() and returns -EINVAL if the peer
+ * has not written the CCC descriptor. Windows CACHES that descriptor for
+ * paired devices - so after the device reboots (a firmware update clears its
+ * CCC state) Windows believes the subscription is still live and never
+ * re-writes it. Result: connected, start_notify() reports success, and the
+ * device refuses to send a single byte.
+ *
+ * Tracking it explicitly means the condition is reportable instead of
+ * presenting as "connected but silent".
+ */
+static atomic_t nus_subscribed;
+
+/*
  * The LED has exactly ONE writer: the sample loop. Nothing else touches it.
  * Letting two contexts drive the LEDs directly is what made the status LED
  * flash for a fraction of a second in src/main.c; do not repeat it here.
@@ -252,7 +270,11 @@ static void tx_line(const char *line, size_t len)
  */
 static void ble_tx_line(const char *line, size_t len)
 {
-	if (nus_conn == NULL) {
+	/* Subscription, not connection: a connected client that never wrote the
+	 * CCC descriptor cannot receive notifications, and queueing for it just
+	 * fills the buffer and inflates the drop count.
+	 */
+	if (atomic_get(&nus_subscribed) == 0) {
 		return;
 	}
 
@@ -286,7 +308,7 @@ static void ble_tx_thread(void *a, void *b, void *c)
 	ARG_UNUSED(c);
 
 	while (1) {
-		if (nus_conn == NULL) {
+		if (atomic_get(&nus_subscribed) == 0 || nus_conn == NULL) {
 			k_msleep(100);
 			continue;
 		}
@@ -395,8 +417,14 @@ static void nus_received(struct bt_conn *conn, const uint8_t *const data,
 	}
 }
 
+static void nus_send_enabled(enum bt_nus_send_status status)
+{
+	atomic_set(&nus_subscribed, status == BT_NUS_SEND_STATUS_ENABLED);
+}
+
 static struct bt_nus_cb nus_callbacks = {
 	.received = nus_received,
+	.send_enabled = nus_send_enabled,
 };
 
 /* --- unit conversion ------------------------------------------------------ */
@@ -972,6 +1000,21 @@ int main(void)
 					ble_tx_line(line, (size_t)n);
 				}
 			}
+		}
+
+		/*
+		 * Status, 1 Hz. Goes out over USB CDC ALWAYS - including when
+		 * no BLE client is subscribed, which is precisely the case it
+		 * exists to explain. "sub=0" with a client connected means the
+		 * peer never wrote the CCC descriptor (Windows caches it for
+		 * paired devices), and that is why no samples are arriving.
+		 */
+		n = snprintk(line, sizeof(line), "$S,%u,%u,%u\n",
+			     (unsigned int)atomic_get(&nus_subscribed),
+			     dropped, ble_dropped);
+		if (n > 0) {
+			tx_line(line, (size_t)n);
+			ble_tx_line(line, (size_t)n);
 		}
 
 		if (pedo_ok && pedometer_read(&steps) == 0) {

@@ -86,6 +86,11 @@ class LinkBase:
         self.battery_pct: int | None = None
         self.battery_mv: int | None = None
         self.charging = False
+        # From $S. ble_subscribed False while connected means the
+        # peer never wrote the CCC descriptor - see main.c.
+        self.ble_subscribed: bool | None = None
+        self.usb_drops = 0
+        self.ble_drops = 0
 
         self._csv = None
         self._csv_n = 0
@@ -136,6 +141,10 @@ class LinkBase:
                 # resolve a 100 ms free-fall, and the status strip says so.
                 self._synth_seq += 1
                 self._sample(self._synth_seq, [int(v) for v in p[1:7]])
+            elif p[0] == "$S" and len(p) == 4:
+                self.ble_subscribed = p[1] == "1"
+                self.usb_drops = int(p[2])
+                self.ble_drops = int(p[3])
             elif p[0] == "$V" and len(p) == 4:
                 self.battery_pct = int(p[1])
                 self.battery_mv = int(p[2])
