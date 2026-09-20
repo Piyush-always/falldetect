@@ -371,6 +371,10 @@ class MainWindow(QMainWindow):
         self.lbl_analysis.setWordWrap(True)
         lay.addWidget(self.lbl_analysis)
 
+        btn_check = QPushButton("Check my recordings")
+        btn_check.clicked.connect(self.check_recordings)
+        lay.addWidget(btn_check)
+
         btn_open_data = QPushButton("Open data folder")
         btn_open_data.clicked.connect(self.open_data_folder)
         lay.addWidget(btn_open_data)
@@ -559,6 +563,58 @@ class MainWindow(QMainWindow):
                 self.say(f"  {r.outcome}: {r.path.relative_to(DATA_DIR)} "
                          f"({r.samples} samples, {r.confirmed} confirmed)")
 
+
+    def check_recordings(self) -> None:
+        """For each recorded session: what did the engine think it was?
+
+        The corpus replay answers "did a fall fire". This answers "I labelled
+        this sitting - did it say sitting", which is what threshold tuning for
+        a new mount point actually needs.
+        """
+        if not DATA_DIR.exists():
+            self.say("no data/ directory yet — record something first")
+            return
+
+        from .replay import observed
+
+        rows = []
+        for csv_path in sorted(DATA_DIR.rglob("*.csv")):
+            if "sisfall" in csv_path.parts:
+                continue
+            samples, label = [], csv_path.parent.name
+            try:
+                with csv_path.open("r", encoding="ascii", errors="replace") as fh:
+                    for raw in fh:
+                        line = raw.strip()
+                        if not line or line.startswith("#") or line.startswith("seq,"):
+                            continue
+                        parts = line.split(",")
+                        if len(parts) == 7:
+                            try:
+                                v = [int(x) for x in parts]
+                            except ValueError:
+                                continue
+                            samples.append(tuple(v[1:]))
+            except OSError:
+                continue
+            if len(samples) < 208:
+                continue
+            rows.append((label, csv_path.name, observed(samples, self.engine.th)))
+
+        if not rows:
+            self.say("no usable recordings found under data/")
+            return
+
+        self.say(f"— checked {len(rows)} recordings —")
+        for label, name, o in rows:
+            cal = "" if o["calibrated"] else "  [NOT CALIBRATED]"
+            falls = f"  falls={o['falls']}" if o["falls"] else ""
+            self.say(f"  {label:22} -> {o['posture']} {o['posture_pct']}% / "
+                     f"{o['activity']} {o['activity_pct']}%{falls}{cal}")
+        self.say("Labels on the left are what you recorded; the right is what "
+                 "the detector saw. Where they disagree, adjust the thresholds "
+                 "above and check again.")
+
     def open_data_folder(self) -> None:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(str(DATA_DIR))  # noqa: S606 - user-initiated
@@ -739,6 +795,15 @@ class MainWindow(QMainWindow):
             self.btn_conn.setText("Connect")
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
+        elif kind == "button":
+            # The device button toggles recording. This exists because you
+            # cannot reach the laptop while falling onto a mattress, and a
+            # session that starts late or stops early is a session with the
+            # interesting part missing.
+            if self.link is not None and self.link.recording:
+                self.stop_recording()
+            else:
+                self.start_recording()
         elif kind == "fall":
             ev = payload
             tag = "FALL" if ev.confirmed else "candidate"

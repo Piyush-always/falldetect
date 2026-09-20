@@ -94,6 +94,46 @@ def run_samples(samples: list[tuple[int, int, int, int, int, int]],
     return engine, calibrated
 
 
+def observed(samples: list[tuple[int, int, int, int, int, int]],
+             thresholds: Thresholds | None = None,
+             odr_hz: int = 208) -> dict:
+    """What the engine REPORTED over a session, second by second.
+
+    This answers "I recorded myself sitting - did it actually say sitting?",
+    which threshold tuning needs and a fall/no-fall verdict cannot express.
+    The first second is skipped: the gravity filter needs time to settle, and
+    scoring its startup transient would punish thresholds for nothing.
+    """
+    engine = Engine(odr_hz=odr_hz, thresholds=thresholds)
+    calibrated = calibrate_from_quiet(engine, samples)
+
+    postures: dict[str, int] = {}
+    activities: dict[str, int] = {}
+    t = 0.0
+    dt = 1.0 / odr_hz
+    skip = odr_hz
+
+    for i, (ax, ay, az, gx, gy, gz) in enumerate(samples):
+        t += dt
+        engine.push_sample(ax, ay, az, gx, gy, gz, t)
+        if i < skip:
+            continue
+        postures[engine.posture.value] = postures.get(engine.posture.value, 0) + 1
+        activities[engine.activity.value] = activities.get(engine.activity.value, 0) + 1
+
+    n = max(1, sum(postures.values()))
+    top_p = max(postures, key=postures.get) if postures else "UNKNOWN"
+    top_a = max(activities, key=activities.get) if activities else "UNKNOWN"
+    return {
+        "calibrated": calibrated,
+        "posture": top_p,
+        "posture_pct": 100 * postures.get(top_p, 0) // n,
+        "activity": top_a,
+        "activity_pct": 100 * activities.get(top_a, 0) // n,
+        "falls": sum(1 for e in engine.events if e.confirmed),
+    }
+
+
 @dataclass
 class SessionResult:
     path: Path
