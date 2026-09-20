@@ -1,0 +1,14 @@
+# Image version, carried into the signed MCUboot header.
+#
+# Zephyr derives CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION from this automatically
+# (zephyr/modules/Kconfig.mcuboot:94), so this file is the single source of
+# truth - do not also set that Kconfig by hand or the two will drift.
+#
+# BUMP THIS ON EVERY OTA PUSH. Without it the device reports the same version
+# before and after an update, and "what is actually installed?" becomes
+# unanswerable - which is exactly the state this project was in.
+VERSION_MAJOR = 0
+VERSION_MINOR = 6
+PATCHLEVEL = 0
+VERSION_TWEAK = 0
+EXTRAVERSION =

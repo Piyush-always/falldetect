@@ -1,13 +1,23 @@
 """
-Serial link to apps/datalog, and the thread that drives the engine.
+Device links and the thread that drives the engine.
 
-The engine runs on the reader thread, not the GUI thread. At 208 Hz a per-sample
-Qt signal would mean 208 queued events a second and a UI that spends its life
-repainting; instead the thread owns the engine and the GUI samples a snapshot on
-a timer. Repaint cost is the single biggest reason a tool feels cheap.
+The engine runs on the link's own thread, not the GUI thread. At 208 Hz a
+per-sample Qt signal would mean 208 queued events a second and a UI that spends
+its life repainting; instead the thread owns the engine and the GUI samples a
+snapshot on a timer. Repaint cost is the single biggest reason a tool feels
+cheap.
 
 Discrete things the GUI must not miss — fall events, identity, errors — go
 through a queue, because dropping one of those is not a cosmetic problem.
+
+TRANSPORTS
+----------
+`LinkBase` holds everything transport-agnostic: line parsing, sequence-gap
+detection, CSV recording, stats. `DeviceLink` adds USB CDC serial;
+`ble_link.BleDeviceLink` adds BLE/NUS and is what the app actually uses — the
+product is a wireless device, so the GUI only exposes BLE. Serial is kept
+because it costs nothing to keep once the parsing is shared, and it is the
+fallback if BLE throughput ever proves too lossy at full ODR.
 """
 
 from __future__ import annotations
@@ -49,10 +59,17 @@ def list_ports() -> list[tuple[str, str, bool]]:
     return [(p.device, p.description or "", is_board(p)) for p in ports]
 
 
-class DeviceLink(threading.Thread):
-    def __init__(self, port: str, engine: Engine):
-        super().__init__(daemon=True)
-        self.port = port
+class LinkBase:
+    """Transport-agnostic half of a device link.
+
+    NOT a Thread. The serial transport owns a thread; the BLE transport runs
+    on the shared BleWorker loop instead (see ble_worker.py for why a
+    per-operation loop is not acceptable on Windows). Subclasses implement
+    start()/shutdown() and feed bytes in via feed_bytes(); everything below —
+    parsing, gap accounting, recording, stats — is shared.
+    """
+
+    def __init__(self, engine: Engine):
         self.engine = engine
         self.events: queue.Queue = queue.Queue()
 
@@ -65,50 +82,45 @@ class DeviceLink(threading.Thread):
         self.last_rx = time.time()
         self.rate = 0.0
         self.identity = ""
+        # Battery, from the device's $V line. None until first seen.
+        self.battery_pct: int | None = None
+        self.battery_mv: int | None = None
+        self.charging = False
 
         self._csv = None
         self._csv_n = 0
         self._synth_seq = 0
+        self._buf = b""
 
         self._rate_mark = (time.time(), 0)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
+    def start(self) -> None:
+        raise NotImplementedError
+
     def shutdown(self) -> None:
         self._stop.set()
 
-    def run(self) -> None:
-        try:
-            ser = serial.Serial(self.port, 115200, timeout=0.2)
-        except Exception as exc:  # noqa: BLE001
-            self.events.put(("error", f"Cannot open {self.port}: {exc}"))
-            return
-
-        self.events.put(("log", f"connected to {self.port}"))
-        buf = b""
-        try:
-            while not self._stop.is_set():
-                data = ser.read(ser.in_waiting or 1)
-                if not data:
-                    continue
-                self.last_rx = time.time()
-                # CRLF, plus USB packet boundaries can leave a bare CR.
-                buf += data.replace(b"\r", b"\n")
-                while b"\n" in buf:
-                    raw, buf = buf.split(b"\n", 1)
-                    line = raw.decode("ascii", "replace").strip()
-                    if line:
-                        self._parse(line)
-        except Exception as exc:  # noqa: BLE001
-            self.events.put(("error", f"serial error: {exc}"))
-        finally:
-            self.stop_recording()
-            try:
-                ser.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self.events.put(("log", "port closed"))
-
     # ── parsing ──────────────────────────────────────────────────────────────
+    def feed_bytes(self, data: bytes) -> None:
+        """Accumulate transport bytes and dispatch each complete line.
+
+        Buffering lives here rather than in each transport because neither
+        transport delivers whole lines: serial splits on USB packet boundaries,
+        and a BLE notification is capped at the negotiated MTU, so a single
+        $D line can and does arrive in two notifications.
+        """
+        if not data:
+            return
+        self.last_rx = time.time()
+        # CRLF, plus USB packet boundaries can leave a bare CR.
+        self._buf += data.replace(b"\r", b"\n")
+        while b"\n" in self._buf:
+            raw, self._buf = self._buf.split(b"\n", 1)
+            line = raw.decode("ascii", "replace").strip()
+            if line:
+                self._parse(line)
+
     def _parse(self, line: str) -> None:
         if not line.startswith("$"):
             self.events.put(("log", line))
@@ -124,6 +136,14 @@ class DeviceLink(threading.Thread):
                 # resolve a 100 ms free-fall, and the status strip says so.
                 self._synth_seq += 1
                 self._sample(self._synth_seq, [int(v) for v in p[1:7]])
+            elif p[0] == "$V" and len(p) == 4:
+                self.battery_pct = int(p[1])
+                self.battery_mv = int(p[2])
+                self.charging = p[3] == "1"
+            elif p[0] == "$B" and len(p) == 3:
+                # Cancel button. Surfaced as an event so the alert flow can
+                # consume it later without polling.
+                self.events.put(("button", int(p[2])))
             elif p[0] == "$P" and len(p) == 3:
                 self.engine.push_steps(int(p[2]), time.time())
             elif p[0] == "$I":
@@ -206,3 +226,39 @@ class DeviceLink(threading.Thread):
     def trace_copy(self) -> list:
         with self._lock:
             return list(self.engine.trace)
+
+
+class DeviceLink(LinkBase):
+    """USB CDC serial transport. Owns its own reader thread."""
+
+    def __init__(self, port: str, engine: Engine):
+        super().__init__(engine)
+        self.port = port
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self.run, daemon=True)
+        self._thread.start()
+
+    def run(self) -> None:
+        try:
+            ser = serial.Serial(self.port, 115200, timeout=0.2)
+        except Exception as exc:  # noqa: BLE001
+            self.events.put(("error", f"Cannot open {self.port}: {exc}"))
+            return
+
+        self.events.put(("log", f"connected to {self.port}"))
+        try:
+            while not self._stop.is_set():
+                data = ser.read(ser.in_waiting or 1)
+                if data:
+                    self.feed_bytes(data)
+        except Exception as exc:  # noqa: BLE001
+            self.events.put(("error", f"serial error: {exc}"))
+        finally:
+            self.stop_recording()
+            try:
+                ser.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.events.put(("log", "port closed"))

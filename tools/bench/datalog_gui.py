@@ -42,7 +42,8 @@ except ImportError:
     sys.exit(1)
 
 
-ROOT = Path(__file__).resolve().parent.parent
+# tools/bench/ -> tools/ -> repo root.
+ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = ROOT / "data"
 
 MOUNTS = ["neck", "wrist", "waist", "pocket"]

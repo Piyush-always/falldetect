@@ -16,12 +16,19 @@
  *      invisible to every later stage forever, so its recall is a hard ceiling
  *      on sensitivity (criterion S1).
  *
- * Deliberately minimal: no FIFO, no gyro, no journal, no BLE. Counting only.
+ * Deliberately minimal otherwise: no FIFO, no gyro, no journal. Counting only.
  * A rotating threshold sweep means one flash covers all eight FF_THS settings
  * rather than eight wear sessions.
  *
+ * BLE OTA is wired in (see sysbuild.conf / boards/xiao_ble_nrf52840_sense.overlay
+ * for the MCUboot side) so every later revision of this probe - and eventually
+ * the real detector - updates wirelessly instead of only over USB. Proved out
+ * first in apps/blink; same fragment and pattern here.
+ *
  * Execution context: main thread ticks and reports; INT1 arrives on a GPIO ISR
  * which does nothing but mask the line and hand off to the system workqueue.
+ * BLE's connected()/bt_ready() run on the Bluetooth host's own context and
+ * only ever call k_work_submit(), never touching IMU/LED state.
  *
  * Units: acceleration in milli-g. No floating point anywhere.
  */
@@ -33,6 +40,11 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/mgmt/mcumgr/transport/smp_bt.h>
+#include <zephyr/dfu/mcuboot.h>
 
 #include "imu/imu_ff.h"
 #include "imu/lsm6ds3tr_reg.h"
@@ -134,7 +146,7 @@ static void led_set(enum led_state state)
 	(void)gpio_pin_set_dt(&led_blue, state == LED_MOTION);
 }
 
-/* Machine-readable status cadence, for tools/ff_gui.py. */
+/* Machine-readable status cadence, for tools/bench/ff_gui.py. */
 #define STATUS_SECONDS 2
 
 /* Live sample stream for the host visual. 10 Hz is far too slow to see a fall
@@ -281,7 +293,7 @@ static void report(uint32_t uptime_s)
 }
 
 /*
- * Compact status line for tools/ff_gui.py.
+ * Compact status line for tools/bench/ff_gui.py.
  *   $S,<uptime_s>,<cur_ths>,<drift_faults>,e0,s0,e1,s1,...,e7,s7
  * Kept separate from report() so the human-readable view stays readable on a
  * plain terminal and the parser never has to scrape prose.
@@ -360,11 +372,79 @@ static void sample_emit(void)
 	}
 }
 
+/* --- BLE OTA ---------------------------------------------------------------
+ *
+ * Enabling CONFIG_BT_PERIPHERAL and the MCUmgr BT transport (prj.conf) only
+ * compiles the SMP GATT service in - nothing calls bt_enable()/
+ * bt_le_adv_start() on its own. Pattern matches Zephyr's own reference
+ * (samples/subsys/mgmt/mcumgr/smp_svr/src/bluetooth.c), proved out first in
+ * apps/blink.
+ *
+ * Execution context: advertise()/connected()/bt_ready() run on the Bluetooth
+ * host's own context, not main thread; advertise() is deferred onto the
+ * system workqueue via k_work so nothing blocking happens in those callbacks.
+ */
+static struct k_work advertise_work;
+
+static const struct bt_data ad[] = {
+	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+	BT_DATA_BYTES(BT_DATA_UUID128_ALL, SMP_BT_SVC_UUID_VAL),
+};
+
+static const struct bt_data sd[] = {
+	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+};
+
+static void advertise(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	(void)bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+}
+
+static void connected(struct bt_conn *conn, uint8_t err)
+{
+	ARG_UNUSED(conn);
+
+	if (err != 0) {
+		k_work_submit(&advertise_work);
+	}
+}
+
+static void on_conn_recycled(void)
+{
+	k_work_submit(&advertise_work);
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
+	.recycled = on_conn_recycled,
+};
+
+static void bt_ready(int err)
+{
+	if (err == 0) {
+		k_work_submit(&advertise_work);
+	}
+}
+
 /* --- main ----------------------------------------------------------------- */
 
 int main(void)
 {
 	int err;
+
+	/*
+	 * Enabled before anything IMU-related, and unconditionally: if sensor
+	 * bring-up below fails, this probe should still be reachable over BLE
+	 * to receive a fixed build rather than being stranded until the next
+	 * physical USB recovery.
+	 */
+	k_work_init(&advertise_work, advertise);
+	err = bt_enable(bt_ready);
+	if (err != 0) {
+		printk("FAIL: bt_enable: %d\n", err);
+	}
 
 	if (!gpio_is_ready_dt(&led_red) || !gpio_is_ready_dt(&led_green) ||
 	    !gpio_is_ready_dt(&led_blue)) {
@@ -446,6 +526,19 @@ int main(void)
 	if (err != 0) {
 		printk("FAIL: INT1 callback: %d\n", err);
 		return err;
+	}
+
+	/*
+	 * MCUboot reverts to the previous image on the NEXT reset unless the
+	 * running one explicitly confirms itself - a forgotten manual confirm
+	 * from the OTA client would otherwise silently undo every update.
+	 * Gated behind IMU + INT1 bring-up above all succeeding, not called
+	 * unconditionally at the top: a build that cannot even do that stays
+	 * reachable over BLE (enabled earlier, independent of IMU state) to
+	 * receive a fix, but still reverts if power-cycled meanwhile.
+	 */
+	if (!boot_is_img_confirmed()) {
+		(void)boot_write_img_confirmed();
 	}
 
 	/*

@@ -1,6 +1,6 @@
 # PDM Microphone — Recording Tool Plan
 
-**Status:** v0.1 — implemented as `apps/mic_record` + `tools/mic_gui.py`.
+**Status:** v0.1 — implemented as `apps/mic_record` + `tools/bench/mic_gui.py`.
 **Date:** 2026-08-01
 
 > **Scope note.** [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md) places voice at Phase 7,
@@ -144,7 +144,7 @@ not lose the START frame.
 
 ---
 
-## 6. Host tool (`tools/mic_gui.py`)
+## 6. Host tool (`tools/bench/mic_gui.py`)
 
 tkinter GUI. Dependencies: **`pyserial` only** — `tkinter`, `wave`, `winsound` and
 `threading` are all standard library, and `winsound` gives playback on Windows with no

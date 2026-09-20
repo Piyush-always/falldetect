@@ -2,7 +2,7 @@
  * PDM microphone recorder for the XIAO nRF52840 Sense.
  *
  * Streams 16 kHz / 16-bit / mono PCM to a host over USB CDC as framed binary,
- * under host control. Companion host tool: tools/mic_gui.py.
+ * under host control. Companion host tool: tools/bench/mic_gui.py.
  *
  * This is a bench instrument, not wearable firmware. It shares no code with the
  * fall detector.

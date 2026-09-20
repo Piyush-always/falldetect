@@ -134,6 +134,50 @@ def qss() -> str:
     QPushButton#Primary:hover    {{ background: {t['accent']}; }}
     QPushButton#Primary:disabled {{ background: {t['surface_1']}; border-color: {t['hairline']};
                                     color: {t['text_3']}; }}
+    QPushButton#Danger {{
+        background: {t['danger']};
+        border: 1px solid {t['danger']};
+        color: #FFFFFF;
+        font-size: {T_HEADING[0]}px;
+        font-weight: {T_HEADING[1]};
+    }}
+
+    /* Segmented control: the User tab's wear-position picker. Reads as one
+       control with a selected segment, not three independent buttons. */
+    QPushButton#Segment {{
+        background: {t['surface_2']};
+        border: 1px solid {t['hairline']};
+        color: {t['text_2']};
+        font-weight: 600;
+    }}
+    QPushButton#Segment:hover   {{ background: {t['surface_3']}; }}
+    QPushButton#Segment:checked {{
+        background: {t['accent']};
+        border-color: {t['accent']};
+        color: #FFFFFF;
+    }}
+
+    QTabWidget#Tabs::pane {{ border: none; background: {t['surface_0']}; }}
+    QTabBar {{ background: {t['surface_1']}; }}
+    QTabBar::tab {{
+        background: transparent;
+        color: {t['text_2']};
+        padding: 9px 20px;
+        margin: 0;
+        border: none;
+        border-bottom: 2px solid transparent;
+        font-size: {T_BODY[0]}px;
+        font-weight: 600;
+    }}
+    QTabBar::tab:hover    {{ color: {t['text_1']}; }}
+    QTabBar::tab:selected {{ color: {t['text_1']}; border-bottom-color: {t['accent']}; }}
+
+    QProgressBar {{
+        background: {t['surface_3']};
+        border: none;
+        border-radius: 3px;
+    }}
+    QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
 
     QComboBox, QSpinBox, QLineEdit {{
         background: {t['surface_2']};

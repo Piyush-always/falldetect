@@ -8,7 +8,7 @@ only listens to advertisements while the board is in bootloader mode.
 
 Usage:
     1. Double-tap RST on the board (same gesture used for the UF2 drive).
-    2. Within ~20 s, run:  python tools/ble_dfu_scan.py
+    2. Within ~20 s, run:  python tools/scripts/ble_dfu_scan.py
     3. Look for a device whose services include the Secure DFU UUID
        (0000fe59-0000-1000-8000-00805f9b34fb) or the legacy DFU UUID
        (00001530-1212-efde-1523-785feabcd123), or whose name is "DfuTarg" /

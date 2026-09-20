@@ -72,6 +72,44 @@ Write-Host "board : $BOARD"   -ForegroundColor Cyan
 Write-Host "sdk   : $NCS_VERSION ($BUNDLE_ID)" -ForegroundColor Cyan
 Write-Host ''
 
+
+# --- VERSION drift guard ---------------------------------------------------
+# CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION derives from the app's VERSION file, but
+# it is a *Kconfig* value: an incremental build prints "No change to
+# configuration" and signs the image with the PREVIOUS version. You then push
+# an update and the device truthfully reports the old version number, which is
+# worse than having no version at all - it makes "what is installed?"
+# actively misleading.
+#
+# So: if the VERSION file disagrees with the last generated .config, force a
+# pristine build rather than leaving it to be remembered.
+$verFile = Join-Path $srcDir 'VERSION'
+if ((Test-Path $verFile) -and (-not $Pristine) -and (Test-Path $bldDir)) {
+    $v = @{}
+    foreach ($line in (Get-Content $verFile)) {
+        if ($line -match '^\s*([A-Z_]+)\s*=\s*(\d+)') { $v[$Matches[1]] = $Matches[2] }
+    }
+    if ($v.ContainsKey('VERSION_MAJOR')) {
+        $want = "$($v['VERSION_MAJOR']).$($v['VERSION_MINOR']).$($v['PATCHLEVEL'])"
+        $cfg = Get-ChildItem $bldDir -Filter '.config' -Recurse -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.FullName -notmatch 'mcuboot' } |
+               Where-Object { Select-String -Path $_.FullName -Pattern 'MCUBOOT_IMGTOOL_SIGN_VERSION' -Quiet } |
+               Select-Object -First 1
+        if ($cfg) {
+            $line = Select-String -Path $cfg.FullName -Pattern 'CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="([^"]+)"'
+            if ($line) {
+                $have = ($line.Matches[0].Groups[1].Value -split '\+')[0]
+                if ($have -ne $want) {
+                    Write-Host "VERSION changed ($have -> $want) - forcing a pristine build so the" -ForegroundColor Yellow
+                    Write-Host "signed image actually carries the new version." -ForegroundColor Yellow
+                    Write-Host ''
+                    $Pristine = $true
+                }
+            }
+        }
+    }
+}
+
 # --- build -----------------------------------------------------------------
 # west resolves its workspace from the working directory, so run it from the
 # SDK tree and point at our out-of-tree app by absolute path.

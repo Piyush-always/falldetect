@@ -72,25 +72,21 @@ Two non-obvious details it handles:
 
 ```
 falldetect-gkl/
-├── PROJECT_OUTLINE.md      system design, phases, risks
-├── ACCEL_PLAN.md           accelerometer / data-collection plan
-├── MIC_PLAN.md             PDM microphone recorder plan
-├── SETUP.md                this file
-├── apps/
-│   ├── blink/              Phase 0 bring-up
-│   │   ├── CMakeLists.txt
-│   │   ├── prj.conf
-│   │   └── src/main.c
-│   └── mic_record/
-│       ├── CMakeLists.txt
-│       ├── prj.conf
-│       ├── boards/
-│       │   └── xiao_ble_nrf52840_sense.overlay
-│       └── src/main.c
-├── tools/
-│   ├── build.ps1           build + flash driver
-│   ├── mic_gui.py          recorder GUI
-│   └── mic_gui.ps1         GUI launcher
+├── doc/                    PROJECT_OUTLINE, ACCEL_PLAN, MIC_PLAN, SETUP (this file)
+├── CMakeLists.txt          product firmware: built from the repo ROOT, not apps/
+├── prj.conf
+├── src/                    product firmware sources (IMU free-fall probe)
+├── apps/                   bench instruments, each a standalone Zephyr app
+│   ├── blink/              Phase 0 bring-up; where BLE OTA was proved out
+│   ├── datalog/            labelled data-collection rig (USB CDC + BLE telemetry)
+│   └── mic_record/         PDM microphone recorder
+├── tools/                  see tools/README.md
+│   ├── build.ps1           build + flash any firmware app
+│   ├── fd_studio.ps1       launch FD Studio (the tool)
+│   ├── fd_studio/          FD Studio GUI package
+│   ├── scripts/            command-line utilities (OTA push, BLE scan)
+│   └── bench/              older single-purpose GUIs
+├── data/                   recorded sessions, data/<mount>/<activity>/*.csv
 ├── build/                  generated, disposable
 └── recordings/             captured .wav files
 ```
@@ -145,7 +141,8 @@ There is no debugger and none is needed.
 ### Host GUI
 
 ```powershell
-.\tools\mic_gui.ps1
+.\tools\fd_studio.ps1          # FD Studio - the main tool
+.\tools\bench\mic_gui.ps1      # microphone recorder
 ```
 
 ---

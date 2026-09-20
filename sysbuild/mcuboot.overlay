@@ -1,0 +1,60 @@
+/*
+ * Same partition layout as ../boards/xiao_ble_nrf52840_sense.overlay - see
+ * that file for the full explanation. This copy is required because MCUboot
+ * builds as its own sysbuild image with its own devicetree pass; sysbuild
+ * only applies an app-level boards/*.overlay to the main application, so
+ * MCUboot needs this file (named after the sysbuild image, per
+ * sysbuild/<image>.overlay) to see the same &boot_partition it links against
+ * (its own boot/zephyr/app.overlay sets zephyr,code-partition = &boot_partition).
+ *
+ * KEEP IN SYNC with ../boards/xiao_ble_nrf52840_sense.overlay AND with
+ * apps/blink/sysbuild/mcuboot.overlay (same board, same physical layout).
+ */
+
+&flash0 {
+	/delete-node/ partitions;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		reserved_partition_0: partition@0 {
+			label = "SoftDevice";
+			read-only;
+			reg = <0x00000000 0x00027000>;
+		};
+
+		boot_partition: partition@27000 {
+			label = "mcuboot";
+			reg = <0x00027000 0x0000C000>;
+		};
+
+		slot0_partition: partition@33000 {
+			label = "image-0";
+			reg = <0x00033000 0x0005C800>;
+		};
+
+		slot1_partition: partition@8f800 {
+			label = "image-1";
+			reg = <0x0008F800 0x0005C800>;
+		};
+
+		storage_partition: partition@ec000 {
+			label = "Storage";
+			reg = <0x000EC000 0x00008000>;
+		};
+	};
+};
+
+/*
+ * Set directly rather than relying on boot/zephyr/app.overlay to still apply
+ * alongside this file - the board's stock chosen node points at the
+ * code_partition label this overlay just deleted, and that must not survive
+ * into the merged tree.
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &boot_partition;
+	};
+};

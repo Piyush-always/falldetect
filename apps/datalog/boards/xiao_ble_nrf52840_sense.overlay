@@ -1,0 +1,140 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/*
+ * Battery measurement.
+ *
+ * CONFIDENCE: **Assumed**, not Verified. These values are the widely-published
+ * community figures for the XIAO nRF52840; they are NOT stated in
+ * doc/Seeed-Studio-XIAO-Series-SOM-Datasheet.pdf and the upstream board DTS
+ * defines no battery node. Confirm against a multimeter before trusting any
+ * percentage: a healthy Li-Po reads 3.2-4.2 V. The tool reports raw millivolts
+ * next to the percentage precisely so a wrong ratio is obvious - ~1.4 V or
+ * ~12 V means these resistors are wrong, not that the battery is flat.
+ *
+ *   P0.31 / AIN7  battery voltage, through the divider
+ *   P0.14         divider enable, active LOW (kept off except when sampling,
+ *                 otherwise the divider itself drains the cell continuously)
+ *   1 Mohm / 510 kohm divider -> full-scale ~4.2 V maps to ~1.42 V at the pin
+ */
+/ {
+	vbatt {
+		compatible = "voltage-divider";
+		io-channels = <&adc 7>;
+		output-ohms = <510000>;
+		full-ohms = <(1000000 + 510000)>;
+		power-gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+	};
+
+	/*
+	 * Charge status from the BQ25101, shared with the charge LED on P0.17.
+	 * Also **Assumed**: the pinout labels P0.17 CHARGE LED, and the charger
+	 * pulls it low while charging. Verify by plugging USB in and watching
+	 * the reported state flip.
+	 */
+	charging {
+		compatible = "gpio-keys";
+
+		charge_status: charge_status {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Charging";
+		};
+	};
+};
+
+
+/*
+ * Cancel button on D10 = P1.15 (gpio1 pin 15), verified against the XIAO
+ * nRF52840 pinout: D10 maps to P1.15, otherwise unused (its alternate
+ * function is SPI_MOSI, which this app does not use).
+ *
+ * Wiring is a bare switch between D10 and GND, so the pin needs the SoC's
+ * internal pull-up and reads LOW when pressed - hence GPIO_ACTIVE_LOW. With
+ * no pull-up the pin would float and trigger on nothing but nearby mains hum.
+ */
+/ {
+	buttons {
+		compatible = "gpio-keys";
+
+		button0: button_0 {
+			gpios = <&gpio1 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Cancel";
+		};
+	};
+
+	aliases {
+		sw0 = &button0;
+	};
+};
+
+/*
+ * BLE OTA layout: splits the board's stock 788 KB "Application" partition
+ * (zephyr/dts/vendor/nordic/nrf52840_partition_uf2_sdv7.dtsi, included by
+ * zephyr/boards/seeed/xiao_ble/xiao_ble_common.dtsi) into MCUboot + two
+ * update slots. Identical to apps/blink/boards/xiao_ble_nrf52840_sense.overlay
+ * and the root firmware's boards/xiao_ble_nrf52840_sense.overlay - MCUboot
+ * doesn't care which app occupies slot0/slot1 and every app here targets the
+ * same physical board.
+ *
+ * The three regions the Adafruit UF2 bootloader itself owns - SoftDevice
+ * (0x0-0x27000), Storage (0xec000-0xf4000), and its own code at the top of
+ * flash (0xf4000-0x100000, previously labelled "boot_partition"/"UF2" in the
+ * stock dtsi) - keep their stock addresses and sizes, and are simply left
+ * out of this partitions node. Nothing here writes to that top-of-flash
+ * region, so double-tap-RST UF2 recovery still works for this entire span
+ * even if a bad OTA image is ever written to slot0/slot1.
+ *
+ * Must stay identical to sysbuild/mcuboot.overlay - that file gives MCUboot
+ * itself the same view of these partitions; this one gives it to the app.
+ *
+ * Math (hand-verified, fills the stock 0x27000-0xec000 span exactly):
+ *   0x27000-0x33000  boot_partition   MCUboot itself       48 KB
+ *   0x33000-0x8f800  slot0_partition  primary app slot    370 KB
+ *   0x8f800-0xec000  slot1_partition  secondary/OTA slot  370 KB
+ */
+
+&flash0 {
+	/delete-node/ partitions;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		reserved_partition_0: partition@0 {
+			label = "SoftDevice";
+			read-only;
+			reg = <0x00000000 0x00027000>;
+		};
+
+		boot_partition: partition@27000 {
+			label = "mcuboot";
+			reg = <0x00027000 0x0000C000>;
+		};
+
+		slot0_partition: partition@33000 {
+			label = "image-0";
+			reg = <0x00033000 0x0005C800>;
+		};
+
+		slot1_partition: partition@8f800 {
+			label = "image-1";
+			reg = <0x0008F800 0x0005C800>;
+		};
+
+		storage_partition: partition@ec000 {
+			label = "Storage";
+			reg = <0x000EC000 0x00008000>;
+		};
+	};
+};
+
+/*
+ * Set directly for the same reason as sysbuild/mcuboot.overlay: the board's
+ * stock chosen node points at the code_partition label this overlay just
+ * deleted. The app runs from slot0, not from boot_partition (that's MCUboot's).
+ */
+/ {
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+	};
+};

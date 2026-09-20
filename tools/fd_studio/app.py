@@ -12,21 +12,27 @@ job is to be trusted while someone throws themselves onto a mattress.
 
 from __future__ import annotations
 
+import os
 import queue
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from . import tokens as T
+from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
-from .link import DeviceLink, list_ports
+from .link import LinkBase
+from .ota_view import OtaTab
+from .replay import replay_corpus, summarize
+from .user_view import UserTab
 from .widgets import (AxisBars, BubbleLevel, CascadeStepper, OrientationView,
                       StatePlate, TracePlot)
 
@@ -73,6 +79,17 @@ def _hline() -> QFrame:
     return f
 
 
+class _ScanWorker(QObject):
+    """Carries BLE scan results from the worker thread to the GUI thread.
+
+    Qt widgets may only be touched from the GUI thread, so the scan thread
+    emits these instead of populating the combo box itself.
+    """
+
+    done = Signal(list)
+    failed = Signal(str)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -81,10 +98,16 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1080, 700)
 
         self.engine = Engine()
-        self.link: DeviceLink | None = None
+        self.link: LinkBase | None = None
         self._fall_until = 0.0
         self._tick_broken = False
+        self._notice = ""
+        self._scanning = False
         self._spins: dict[str, QSpinBox] = {}
+
+        self._scan = _ScanWorker()
+        self._scan.done.connect(self._on_scan_done)
+        self._scan.failed.connect(self._on_scan_failed)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -95,16 +118,32 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
         outer.addWidget(self._toolbar())
 
-        body = QHBoxLayout()
+        # Three audiences, three tabs, in the order they matter to a viewer:
+        # what the product does, how it decides, how it gets updated.
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("Tabs")
+        self.tabs.setDocumentMode(True)
+
+        self.user_tab = UserTab(lambda: self.engine, lambda: self.link)
+        self.tabs.addTab(self.user_tab, "User")
+
+        debug = QWidget()
+        body = QHBoxLayout(debug)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._sidebar())
         body.addWidget(self._primary(), 1)
         body.addWidget(self._inspector())
-        outer.addLayout(body, 1)
+        self.tabs.addTab(debug, "Debug")
+
+        self.ota_tab = OtaTab(self._ota_target, self._disconnect_for_update,
+                              self._set_firmware_version)
+        self.tabs.addTab(self.ota_tab, "Update")
+
+        outer.addWidget(self.tabs, 1)
         outer.addWidget(self._status())
 
-        self.refresh_ports()
+        self.refresh_devices()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -123,9 +162,9 @@ class MainWindow(QMainWindow):
         self.port_cb.setMinimumWidth(280)
         lay.addWidget(self.port_cb)
 
-        b = QPushButton("Refresh")
-        b.clicked.connect(self.refresh_ports)
-        lay.addWidget(b)
+        self.btn_scan = QPushButton("Scan")
+        self.btn_scan.clicked.connect(self.refresh_devices)
+        lay.addWidget(self.btn_scan)
 
         self.btn_conn = QPushButton("Connect")
         self.btn_conn.setObjectName("Primary")
@@ -314,6 +353,28 @@ class MainWindow(QMainWindow):
         b = QPushButton("Reset to defaults")
         b.clicked.connect(self.reset_thresholds)
         lay.addWidget(b)
+
+        lay.addWidget(_hline())
+
+        # offline analysis — ACCEL_PLAN.md Phase 2a: replay against the
+        # corpus, tune thresholds, get sensitivity/specificity. No device
+        # connection needed; works on whatever is already recorded to disk.
+        lay.addWidget(_label("OFFLINE ANALYSIS", "Micro"))
+        lay.addWidget(_label(
+            "Replays every recorded session under data/ through the current "
+            "thresholds above. Ground truth comes from the folder each "
+            "session was saved into.", "Caption"))
+        btn_analyze = QPushButton("Replay recorded corpus")
+        btn_analyze.clicked.connect(self.analyze_corpus)
+        lay.addWidget(btn_analyze)
+        self.lbl_analysis = _label("no analysis run yet", "MonoDim")
+        self.lbl_analysis.setWordWrap(True)
+        lay.addWidget(self.lbl_analysis)
+
+        btn_open_data = QPushButton("Open data folder")
+        btn_open_data.clicked.connect(self.open_data_folder)
+        lay.addWidget(btn_open_data)
+
         lay.addStretch(1)
         return wrap
 
@@ -331,16 +392,86 @@ class MainWindow(QMainWindow):
         return bar
 
     # ── actions ──────────────────────────────────────────────────────────────
-    def refresh_ports(self) -> None:
+    def refresh_devices(self) -> None:
+        """Scan for nearby BLE devices, falldetect boards first.
+
+        Blocking, because a scan is a few seconds and the alternative is a
+        second async plumbing path for one button. The button is disabled
+        while it runs so the freeze is explained rather than mysterious.
+        """
+        if self._scanning:
+            return
+        self._scanning = True
+        self.btn_scan.setEnabled(False)
+        self.btn_scan.setText("Scanning...")
+        self.notify("Scanning for devices...")
+
+        # Off the Qt GUI thread: scan_blocking() waits on the shared BLE loop,
+        # and blocking Qt's loop here would freeze the UI for the scan window
+        # (and stop WinRT callbacks being pumped). The scan itself runs on the
+        # single long-lived loop in ble_worker.py - this thread only waits.
+        threading.Thread(target=self._scan_worker, daemon=True).start()
+
+    def _scan_worker(self) -> None:
+        try:
+            devices = scan_blocking(6.0)
+        except Exception as exc:  # noqa: BLE001
+            self._scan.failed.emit(explain(exc))
+            return
+        self._scan.done.emit(devices)
+
+    def _on_scan_done(self, devices: list) -> None:
+        self._scanning = False
+        self.btn_scan.setEnabled(True)
+        self.btn_scan.setText("Scan")
+
         self.port_cb.clear()
         found = False
-        for dev, desc, is_board in list_ports():
-            tag = "  ✓ falldetect board" if is_board else "  (not the board)"
-            self.port_cb.addItem(f"{dev} — {desc}{tag}", (dev, is_board))
+        for name, address, rssi in devices:
+            is_board = name.startswith("falldetect")
+            tag = "  ✓ falldetect device" if is_board else ""
+            self.port_cb.addItem(f"{name}   ({rssi} dBm){tag}", (name, is_board))
             found = found or is_board
-        if not found:
-            self.say("board not found — is it plugged in, and is datalog or "
-                     "the probe flashed?")
+
+        if found:
+            self.notify("")
+        elif devices:
+            self.notify("No falldetect device nearby. Check it is powered, in "
+                        "range, and running a build with BLE telemetry.")
+        else:
+            self.notify("No Bluetooth devices found at all. Check Bluetooth is "
+                        "on and the device is powered.")
+
+    def _on_scan_failed(self, msg: str) -> None:
+        self._scanning = False
+        self.btn_scan.setEnabled(True)
+        self.btn_scan.setText("Scan")
+        # Must reach the user wherever they are. say() only writes to the Debug
+        # tab's log, which is invisible from the User tab - a scan that fails
+        # there would make the whole tool look simply dead.
+        self.notify(msg)
+
+    def _set_firmware_version(self, ver: str) -> None:
+        self.user_tab.firmware_version = ver
+
+    def notify(self, msg: str) -> None:
+        """Surface a message on every tab, not just the Debug log."""
+        self._notice = msg
+        self.user_tab.notice = msg
+        self.lbl_status.setText(msg or "ready")
+        if msg:
+            self.say(msg)
+
+    def _ota_target(self) -> str | None:
+        """Currently selected device name, for the Update tab."""
+        data = self.port_cb.currentData()
+        return data[0] if data else None
+
+    def _disconnect_for_update(self) -> None:
+        """Drop the telemetry link before an update reboots the device."""
+        if self.link:
+            self.say("disconnecting telemetry for the update")
+            self.toggle_connection()
 
     def toggle_connection(self) -> None:
         if self.link:
@@ -356,16 +487,14 @@ class MainWindow(QMainWindow):
 
         data = self.port_cb.currentData()
         if not data:
-            self.say("no serial port selected")
+            self.say("no device selected — press Scan first")
             return
-        dev, is_board = data
+        name, is_board = data
         if not is_board:
-            # Connecting to a Bluetooth virtual port succeeds and then delivers
-            # nothing, forever. Say so at the moment of the mistake.
-            self.say(f"WARNING {dev} is not the falldetect board — expect no data. "
-                     "Pick the port marked ✓.")
+            self.say(f"WARNING '{name}' does not look like a falldetect device — "
+                     "expect no data.")
         self.engine = Engine(thresholds=self.engine.th)
-        self.link = DeviceLink(dev, self.engine)
+        self.link = BleDeviceLink(name, self.engine)
         self.link.start()
         self.btn_conn.setText("Disconnect")
         self.btn_cal.setEnabled(True)
@@ -392,6 +521,47 @@ class MainWindow(QMainWindow):
             sp.setValue(getattr(self.engine.th, attr))
             sp.blockSignals(False)
         self.say("thresholds reset to defaults")
+
+    def analyze_corpus(self) -> None:
+        """Replay every recorded session under data/ through the live
+        threshold values and report corpus-wide sensitivity/specificity.
+
+        Runs on the GUI thread: the current corpus is small (Phase 1 data
+        collection), so a replay finishes well under a second. Move this to
+        a worker thread if the corpus grows large enough to make the window
+        stop responding — not a concern yet, so not built preemptively.
+        """
+        if not DATA_DIR.exists():
+            self.say("no data/ directory yet — record something first")
+            return
+
+        results = replay_corpus(DATA_DIR, thresholds=self.engine.th)
+        if not results:
+            self.say("no recorded sessions found under data/")
+            self.lbl_analysis.setText("no sessions found")
+            return
+
+        s = summarize(results)
+        c = s["counts"]
+        sens = f"{s['sensitivity']:.0%}" if s["sensitivity"] is not None else "n/a"
+        spec = f"{s['specificity']:.0%}" if s["specificity"] is not None else "n/a"
+        self.lbl_analysis.setText(
+            f"{s['n']} sessions — TP {c['TP']}  FN {c['FN']}  "
+            f"FP {c['FP']}  TN {c['TN']}\n"
+            f"sensitivity {sens}  ·  specificity {spec}"
+        )
+        self.say(f"replayed {s['n']} sessions — sensitivity {sens}, specificity {spec} "
+                 f"(TP {c['TP']} FN {c['FN']} FP {c['FP']} TN {c['TN']})")
+
+        # The misses are the actionable part — name them, not just count them.
+        for r in results:
+            if r.outcome in ("FN", "FP"):
+                self.say(f"  {r.outcome}: {r.path.relative_to(DATA_DIR)} "
+                         f"({r.samples} samples, {r.confirmed} confirmed)")
+
+    def open_data_folder(self) -> None:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(DATA_DIR))  # noqa: S606 - user-initiated
 
     def start_recording(self) -> None:
         if not self.link:
@@ -438,6 +608,8 @@ class MainWindow(QMainWindow):
                 self.say(f"internal error in refresh: {exc!r}")
 
     def _tick_inner(self) -> None:
+        self.user_tab.tick()
+
         # Bind the link ONCE. _on_event can set self.link to None (an error tears
         # the connection down), and re-reading self.link each iteration then
         # dereferences None — which is not queue.Empty, so it escapes and kills

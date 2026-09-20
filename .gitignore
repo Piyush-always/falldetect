@@ -15,3 +15,6 @@ build_log*.txt
 # committing it to history. Our own recordings under data/<position>/ are not
 # excluded.
 data/sisfall/
+
+# Working copy extracted from an archived release zip by the OTA tooling.
+firmware/*.extracted.bin

@@ -52,7 +52,8 @@ FRAME_TEXT = 0x02
 FRAME_START = 0x03
 FRAME_STOP = 0x04
 
-OUT_DIR = Path(__file__).resolve().parent.parent / "recordings"
+# tools/bench/ -> tools/ -> repo root.
+OUT_DIR = Path(__file__).resolve().parent.parent.parent / "recordings"
 
 
 class Reader(threading.Thread):

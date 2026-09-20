@@ -1,7 +1,8 @@
-﻿<title>falldetect-gkl â€” Firmware Handbook</title>
+﻿<meta charset="utf-8">
+<title>falldetect-gkl — Firmware Handbook</title>
 
 <style>
-/* â”€â”€ tokens â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── tokens ─────────────────────────────────────────────────────────────── */
 :root{
   --paper:#F3F4F6;  --surface:#FFFFFF; --sunk:#ECEEF1;
   --ink:#14171B;    --ink-soft:#596069; --ink-faint:#858D97;
@@ -31,7 +32,7 @@
   --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
 }
 
-/* â”€â”€ base â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── base ───────────────────────────────────────────────────────────────── */
 *{box-sizing:border-box}
 body{
   margin:0; background:var(--paper); color:var(--ink);
@@ -49,7 +50,7 @@ p code,li code,td code,th code{
 .skip{position:absolute;left:-9999px}
 .skip:focus{left:1rem;top:1rem;z-index:99;background:var(--surface);padding:.6rem 1rem;border:1px solid var(--rule)}
 
-/* â”€â”€ shell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── shell ──────────────────────────────────────────────────────────────── */
 .shell{display:grid; grid-template-columns:var(--rail) minmax(0,1fr); gap:clamp(2rem,5vw,5rem);
   max-width:1180px; margin:0 auto; padding:clamp(1.5rem,4vw,4rem) clamp(1.2rem,4vw,2.5rem)}
 
@@ -66,7 +67,7 @@ p code,li code,td code,th code{
   font-variant-numeric:tabular-nums}
 .rail a.on i{color:var(--brass)}
 
-/* theme switch â€” styled as a two-position panel selector, not a toggle icon,
+/* theme switch — styled as a two-position panel selector, not a toggle icon,
    so the current state is readable rather than inferred */
 .theme{display:flex; width:fit-content; margin-top:1.4rem; background:var(--surface);
   border:1px solid var(--rule); border-radius:3px; overflow:hidden}
@@ -78,14 +79,14 @@ p code,li code,td code,th code{
 .theme button[aria-pressed="true"]{background:var(--brass-wash); color:var(--brass)}
 
 .doc{min-width:0; display:flex; flex-direction:column; gap:2.5rem}
-/* one view at a time â€” the handbook paginates rather than scrolling as a slab */
+/* one view at a time — the handbook paginates rather than scrolling as a slab */
 .view{display:none}
 .view.is-on{display:flex; flex-direction:column; gap:1.15rem}
 #overview.is-on{gap:2.2rem}
 .doc p,.doc ul,.doc ol{margin:0; max-width:var(--measure)}
 .doc li{margin-bottom:.35rem}
 
-/* â”€â”€ masthead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── masthead ───────────────────────────────────────────────────────────── */
 .mast{display:flex; flex-direction:column; gap:1.15rem}
 .eyebrow{font-family:var(--mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase;
   color:var(--brass); margin:0}
@@ -98,7 +99,7 @@ p code,li code,td code,th code{
   border:1px solid var(--rule); border-radius:3px; color:var(--ink-soft); background:var(--surface)}
 .chip b{color:var(--ink); font-weight:600}
 
-/* â”€â”€ section headings: hairline + brass tick â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── section headings: hairline + brass tick ────────────────────────────── */
 .sechead{display:flex; flex-direction:column; gap:.9rem}
 .sechead .bar{height:1px; background:var(--rule); position:relative}
 .sechead .bar::before{content:""; position:absolute; left:0; top:-3px; width:34px; height:7px; background:var(--brass)}
@@ -110,7 +111,7 @@ p code,li code,td code,th code{
 h3{margin:1.4rem 0 0; font-size:1.06rem; letter-spacing:-.01em; font-weight:650}
 h3 + p{margin-top:.15rem}
 
-/* â”€â”€ hero trace â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── hero trace ─────────────────────────────────────────────────────────── */
 .trace{background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:1.4rem 1.2rem 1rem;
   box-shadow:var(--shadow); display:flex; flex-direction:column; gap:.9rem}
 .trace__top{display:flex; justify-content:space-between; align-items:baseline; gap:1rem; flex-wrap:wrap;
@@ -132,7 +133,7 @@ h3 + p{margin-top:.15rem}
 .trace__legend b{font-family:var(--mono); font-size:11px; color:var(--brass); letter-spacing:.06em;
   display:block; font-weight:400}
 
-/* â”€â”€ tables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── tables ─────────────────────────────────────────────────────────────── */
 .scroll{overflow-x:auto; border:1px solid var(--rule); border-radius:4px; background:var(--surface)}
 table{border-collapse:collapse; width:100%; font-size:14.5px}
 th,td{text-align:left; padding:.62rem .85rem; border-bottom:1px solid var(--rule-soft); vertical-align:top}
@@ -152,7 +153,7 @@ td.k{font-weight:600; white-space:nowrap}
 .sev{display:inline-block; width:3px; height:1.05em; border-radius:2px; vertical-align:-.18em; margin-right:.5rem}
 .sev--hi{background:var(--alert)} .sev--md{background:var(--brass)} .sev--lo{background:var(--ink-faint)}
 
-/* â”€â”€ notes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── notes ──────────────────────────────────────────────────────────────── */
 .note{border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.95rem 1.1rem;
   display:flex; flex-direction:column; gap:.4rem; max-width:var(--measure)}
 .note__t{font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
@@ -163,14 +164,14 @@ td.k{font-weight:600; white-space:nowrap}
 .note--brass{background:var(--brass-wash); border-color:color-mix(in srgb,var(--brass) 32%,transparent)}
 .note--brass .note__t{color:var(--brass)}
 
-/* â”€â”€ code â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── code ───────────────────────────────────────────────────────────────── */
 pre{margin:0; background:var(--surface); border:1px solid var(--rule); border-radius:4px;
   padding:.95rem 1.1rem; overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6;
   color:var(--ink-soft)}
 pre b{color:var(--ink); font-weight:600}
 pre i{color:var(--brass); font-style:normal}
 
-/* â”€â”€ flow diagram â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── flow diagram ───────────────────────────────────────────────────────── */
 .flow{display:flex; flex-direction:column; gap:0; max-width:var(--measure)}
 .flow__n{border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.8rem 1rem}
 .flow__n h4{margin:0 0 .15rem; font-size:14.5px; font-weight:650; letter-spacing:-.005em}
@@ -182,7 +183,7 @@ pre i{color:var(--brass); font-style:normal}
 .flow__l::before{content:""; width:1px; height:22px; background:var(--rule); position:absolute; margin-left:-1.4rem}
 .flow__l{position:relative}
 
-/* â”€â”€ phases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── phases ─────────────────────────────────────────────────────────────── */
 .phases{display:flex; flex-direction:column; gap:.5rem}
 .ph{display:grid; grid-template-columns:auto 1fr auto; gap:.9rem; align-items:baseline;
   border:1px solid var(--rule); border-radius:4px; background:var(--surface); padding:.75rem .95rem}
@@ -197,7 +198,7 @@ pre i{color:var(--brass); font-style:normal}
 .kv dt{color:var(--ink-faint)}
 .kv dd{margin:0; color:var(--ink); font-variant-numeric:tabular-nums}
 
-/* â”€â”€ pager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ── pager ──────────────────────────────────────────────────────────────── */
 .pager{display:flex; gap:1rem; align-items:stretch; border-top:1px solid var(--rule);
   padding-top:1.4rem}
 .pager a{display:flex; flex-direction:column; gap:.15rem; text-decoration:none; max-width:47%;
@@ -235,7 +236,7 @@ pre i{color:var(--brass); font-style:normal}
 
   <nav class="rail" aria-label="Sections">
     <div class="rail__mark">falldetect-gkl</div>
-    <a href="#overview"><i>â€”</i>Overview</a>
+    <a href="#overview"><i>—</i>Overview</a>
     <a href="#s1"><i>01</i>What this is</a>
     <a href="#s2"><i>02</i>Hardware</a>
     <a href="#s3"><i>03</i>Architecture</a>
@@ -259,7 +260,7 @@ pre i{color:var(--brass); font-style:normal}
 
     <section id="overview" class="view">
     <header class="mast">
-      <p class="eyebrow">Wearable fall detection Â· Firmware handbook</p>
+      <p class="eyebrow">Wearable fall detection · Firmware handbook</p>
       <h1>falldetect&#8209;gkl</h1>
       <p class="lede">A wrist-worn device that detects when an older person falls at home,
         and makes sure a human finds out. This is the single reference for the hardware,
@@ -269,27 +270,27 @@ pre i{color:var(--brass); font-style:normal}
         <span class="chip">nRF Connect SDK <b>v3.1.1</b></span>
         <span class="chip">Zephyr <b>4.1.99</b></span>
         <span class="chip">Board <b>xiao_ble/nrf52840/sense</b></span>
-        <span class="chip">Phase <b>0 â†’ 1</b></span>
+        <span class="chip">Phase <b>0 → 1</b></span>
       </div>
     </header>
 
     <figure class="trace" aria-label="Accelerometer signature of a fall, annotated with the four detection stages">
       <div class="trace__top">
-        <span class="trace__cap">Acceleration magnitude Â· the signature we detect</span>
-        <span class="trace__cap">wrist Â· 208 Hz Â· Â±16 g</span>
+        <span class="trace__cap">Acceleration magnitude · the signature we detect</span>
+        <span class="trace__cap">wrist · 208 Hz · ±16 g</span>
       </div>
       <svg id="sig" viewBox="0 0 1000 280" role="img"
            aria-label="A trace showing walking, then a free-fall dip below 0.5 g, a 3 g impact spike, a settling period, and sustained stillness."></svg>
       <div class="trace__legend">
-        <div><b>1 Â· Free&#8209;fall</b>&lt; 0.5 g for 100â€“200 ms</div>
-        <div><b>2 Â· Impact</b>&gt; 2.5 g within 500 ms</div>
-        <div><b>3 Â· Orientation</b>gravity vector rotates</div>
-        <div><b>4 Â· Stillness</b>no attempt to get up</div>
+        <div><b>1 · Free&#8209;fall</b>&lt; 0.5 g for 100–200 ms</div>
+        <div><b>2 · Impact</b>&gt; 2.5 g within 500 ms</div>
+        <div><b>3 · Orientation</b>gravity vector rotates</div>
+        <div><b>4 · Stillness</b>no attempt to get up</div>
       </div>
     </figure>
     </section>
 
-    <!-- 01 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 01 ───────────────────────────────────────────────────────────── -->
     <section id="s1" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -304,7 +305,7 @@ pre i{color:var(--brass); font-style:normal}
         <span class="note__t">The constraint that shapes everything</span>
         <p>Detecting a fall is easy. Not firing on <em>sitting down heavily, stairs, or leaning
           on a walking frame</em> is the engineering problem. One false alarm at 3&nbsp;am and the
-          device comes off permanently â€” and then you have nothing. Specificity, not sensitivity,
+          device comes off permanently — and then you have nothing. Specificity, not sensitivity,
           is the budget.</p>
       </div>
 
@@ -312,10 +313,10 @@ pre i{color:var(--brass); font-style:normal}
         <table>
           <thead><tr><th class="m">ID</th><th>Criterion</th><th>Target</th><th>Measured by</th></tr></thead>
           <tbody>
-            <tr><td class="m">S1</td><td class="k">Detect a hard fall</td><td>â‰¥ 90% sensitivity</td><td>Offline replay, wrist corpus</td></tr>
-            <tr><td class="m">S2</td><td class="k">Don't cry wolf</td><td>â‰¤ 1 false alarm / week</td><td>14-day wear trial</td></tr>
-            <tr><td class="m">S3</td><td class="k">Time to notification</td><td>â‰¤ 60 s from impact</td><td>Timestamped end-to-end trace</td></tr>
-            <tr><td class="m">S4</td><td class="k">Battery life</td><td>â‰¥ 7 days (stretch 30)</td><td>Measured, not calculated</td></tr>
+            <tr><td class="m">S1</td><td class="k">Detect a hard fall</td><td>≥ 90% sensitivity</td><td>Offline replay, wrist corpus</td></tr>
+            <tr><td class="m">S2</td><td class="k">Don't cry wolf</td><td>≤ 1 false alarm / week</td><td>14-day wear trial</td></tr>
+            <tr><td class="m">S3</td><td class="k">Time to notification</td><td>≤ 60 s from impact</td><td>Timestamped end-to-end trace</td></tr>
+            <tr><td class="m">S4</td><td class="k">Battery life</td><td>≥ 7 days (stretch 30)</td><td>Measured, not calculated</td></tr>
             <tr><td class="m">S5</td><td class="k">Cancel a false alarm</td><td>30 s window, one button</td><td>Usability test, target user</td></tr>
             <tr><td class="m">S6</td><td class="k">Device-offline is an alert</td><td>Detected in 15 min</td><td>Cloud heartbeat watchdog</td></tr>
           </tbody>
@@ -327,14 +328,14 @@ pre i{color:var(--brass); font-style:normal}
         stops working silently, and nobody notices until it matters.</p>
     </section>
 
-    <!-- 02 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 02 ───────────────────────────────────────────────────────────── -->
     <section id="s2" class="view">
       <div class="sechead">
         <div class="bar"></div>
         <div class="row"><span class="num">02</span><h2>Hardware</h2></div>
       </div>
 
-      <p>Every row below was read from the SDK devicetree or from the device itself â€” none of it
+      <p>Every row below was read from the SDK devicetree or from the device itself — none of it
         is taken from vendor marketing.</p>
 
       <div class="scroll">
@@ -345,14 +346,14 @@ pre i{color:var(--brass); font-style:normal}
             <tr><td class="k">MCU</td><td class="m">nRF52840, Cortex-M4F @ 64 MHz</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">FPU</td><td class="m">present, single-precision only</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">RAM / Flash</td><td class="m">256 KB / 1 MB + 2 MB QSPI</td><td><span class="tag tag--v">Verified</span></td></tr>
-            <tr><td class="k">IMU</td><td class="m">ST LSM6DS3TR-C, IÂ²C 0x6A</td><td><span class="tag tag--v">Verified</span></td></tr>
-            <tr><td class="k">IMU interrupt</td><td class="m">INT1 â†’ P0.11</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">IMU</td><td class="m">ST LSM6DS3TR-C, I²C 0x6A</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">IMU interrupt</td><td class="m">INT1 → P0.11</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">IMU power rail</td><td class="m">P1.08, boot-on</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">Microphone</td><td class="m">MSM261D3526H1CPM, PDM</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">Mic power rail</td><td class="m">P1.10, <em>off</em> at boot</td><td><span class="tag tag--v">Verified</span></td></tr>
-            <tr><td class="k">Radio</td><td class="m">BLE 5.0 / 802.15.4 â€” no WAN</td><td><span class="tag tag--v">Verified</span></td></tr>
+            <tr><td class="k">Radio</td><td class="m">BLE 5.0 / 802.15.4 — no WAN</td><td><span class="tag tag--v">Verified</span></td></tr>
             <tr><td class="k">Charging</td><td class="m">BQ25101, 50 / 100 mA</td><td><span class="tag tag--v">Verified</span></td></tr>
-            <tr><td class="k">Board sleep current</td><td class="m">&lt; 5 ÂµA claimed</td><td><span class="tag tag--d">Unmeasured</span></td></tr>
+            <tr><td class="k">Board sleep current</td><td class="m">&lt; 5 µA claimed</td><td><span class="tag tag--d">Unmeasured</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -363,19 +364,19 @@ pre i{color:var(--brass); font-style:normal}
 <b>Board-ID</b>    <i>Seeed_XIAO_nRF52840_Sense</i>
 <b>SoftDevice</b>  S140 version 7.3.0</pre>
       <p>The S140 v7.3.0 SoftDevice is why applications link at <code>0x27000</code>. Zephyr does
-        not use the SoftDevice â€” it brings its own BLE host â€” it simply respects the reserved
+        not use the SoftDevice — it brings its own BLE host — it simply respects the reserved
         region so the UF2 bootloader survives a flash.</p>
 
       <div class="note note--brass">
         <span class="note__t">The single most important hardware fact</span>
-        <p>The LSM6DS3TR-C is not a dumb accelerometer. It has an on-chip event engine â€”
-          free-fall, wake-up, activity/inactivity, 6D orientation, tap â€” plus a 4 KB FIFO, and
-          every event can be routed to INT1. That means the MCU can sleep at single-digit ÂµA and
+        <p>The LSM6DS3TR-C is not a dumb accelerometer. It has an on-chip event engine —
+          free-fall, wake-up, activity/inactivity, 6D orientation, tap — plus a 4 KB FIFO, and
+          every event can be routed to INT1. That means the MCU can sleep at single-digit µA and
           be woken <em>by the fall itself</em>. The entire power architecture depends on it.</p>
       </div>
     </section>
 
-    <!-- 03 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 03 ───────────────────────────────────────────────────────────── -->
     <section id="s3" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -383,32 +384,32 @@ pre i{color:var(--brass); font-style:normal}
       </div>
 
       <p>The nRF52840 has no WiFi, no cellular, no LoRa. It is BLE-only and physically cannot
-        reach a cloud on its own â€” so the gateway choice defines the product's coverage envelope,
+        reach a cloud on its own — so the gateway choice defines the product's coverage envelope,
         which is to say <em>where a person is allowed to fall and still be helped</em>.</p>
 
       <div class="flow">
         <div class="flow__n"><span class="w">On the body</span>
-          <h4>Wearable â€” XIAO nRF52840 Sense</h4>
+          <h4>Wearable — XIAO nRF52840 Sense</h4>
           <p>Accelerometer always on; MCU asleep until INT1 fires. Cascade + classifier, cancel
             button, and an event store on QSPI that survives a dropped link.</p></div>
-        <div class="flow__l"><span>BLE Â· bonded + encrypted</span></div>
+        <div class="flow__l"><span>BLE · bonded + encrypted</span></div>
         <div class="flow__n"><span class="w">In the home</span>
-          <h4>Hub â€” Raspberry Pi or ESP32</h4>
+          <h4>Hub — Raspberry Pi or ESP32</h4>
           <p>BLE central, store-and-forward. The wearable never knows what the gateway is.</p></div>
         <div class="flow__l"><span>MQTT / TLS</span></div>
         <div class="flow__n"><span class="w">Cloud</span>
           <h4>Ingest, dedup, escalate</h4>
           <p>Idempotent by event ID, liveness watchdog, escalation ladder.</p></div>
-        <div class="flow__l"><span>push Â· SMS Â· voice</span></div>
+        <div class="flow__l"><span>push · SMS · voice</span></div>
         <div class="flow__n"><span class="w">Human</span>
-          <h4>Caregiver 1 â†’ 2 â†’ emergency contact</h4>
+          <h4>Caregiver 1 → 2 → emergency contact</h4>
           <p>Acknowledgement required at each rung, or it escalates.</p></div>
       </div>
 
       <div class="note note--alert">
         <span class="note__t">Disclose this, don't discover it</span>
         <p>v1 is an <strong>in-home system</strong>. A fall in the garden, the street or a shop
-          will not be reported. That is a deliberate, bounded scope â€” but it must be stated
+          will not be reported. That is a deliberate, bounded scope — but it must be stated
           plainly to the wearer and their family. If coverage anywhere is genuinely required,
           the XIAO is the wrong board and an nRF9160 / LTE-M is the answer.</p>
       </div>
@@ -419,7 +420,7 @@ pre i{color:var(--brass); font-style:normal}
         firmware impact.</p>
     </section>
 
-    <!-- 04 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 04 ───────────────────────────────────────────────────────────── -->
     <section id="s4" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -441,7 +442,7 @@ pre i{color:var(--brass); font-style:normal}
       </div>
 
       <h3>D2 is the consequential one</h3>
-      <p>Wrist was chosen for compliance, and that is a defensible trade â€” a worn device with a
+      <p>Wrist was chosen for compliance, and that is a defensible trade — a worn device with a
         weaker algorithm beats an accurate device in a drawer. But the arm moves independently of
         the body, so two of the four classic cascade stages degrade, and the wrist sees far more
         high-g daily activity than the trunk ever does.</p>
@@ -451,7 +452,7 @@ pre i{color:var(--brass); font-style:normal}
         both.</p>
     </section>
 
-    <!-- 05 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 05 ───────────────────────────────────────────────────────────── -->
     <section id="s5" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -463,36 +464,36 @@ pre i{color:var(--brass); font-style:normal}
         <table>
           <thead><tr><th>Stage</th><th>Condition</th><th class="m">Start threshold</th><th>At the wrist</th></tr></thead>
           <tbody>
-            <tr><td class="k">1 Â· Free-fall</td><td>|a| drops</td><td class="m">&lt; 0.5 g, 100â€“200 ms</td><td><span class="tag tag--v">Good</span> hardware IRQ, nearly free</td></tr>
-            <tr><td class="k">2 Â· Impact</td><td>|a| peak after free-fall</td><td class="m">&gt; 2.5â€“3.0 g in 500 ms</td><td><span class="tag tag--v">Good</span></td></tr>
-            <tr><td class="k">2b Â· Rotation</td><td>gyro peak during fall</td><td class="m">&gt; 200â€“300 Â°/s</td><td><span class="tag tag--v">Good</span> wrist-specific</td></tr>
-            <tr><td class="k">3 Â· Orientation</td><td>gravity vector rotates</td><td class="m">&gt; 45â€“60Â°</td><td><span class="tag tag--d">Weak</span> arm moves freely</td></tr>
-            <tr><td class="k">4 Â· Stillness</td><td>low variance after impact</td><td class="m">&lt; 0.1 g RMS, 15â€“20 s</td><td><span class="tag tag--d">Weak</span> but not useless</td></tr>
+            <tr><td class="k">1 · Free-fall</td><td>|a| drops</td><td class="m">&lt; 0.5 g, 100–200 ms</td><td><span class="tag tag--v">Good</span> hardware IRQ, nearly free</td></tr>
+            <tr><td class="k">2 · Impact</td><td>|a| peak after free-fall</td><td class="m">&gt; 2.5–3.0 g in 500 ms</td><td><span class="tag tag--v">Good</span></td></tr>
+            <tr><td class="k">2b · Rotation</td><td>gyro peak during fall</td><td class="m">&gt; 200–300 °/s</td><td><span class="tag tag--v">Good</span> wrist-specific</td></tr>
+            <tr><td class="k">3 · Orientation</td><td>gravity vector rotates</td><td class="m">&gt; 45–60°</td><td><span class="tag tag--d">Weak</span> arm moves freely</td></tr>
+            <tr><td class="k">4 · Stillness</td><td>low variance after impact</td><td class="m">&lt; 0.1 g RMS, 15–20 s</td><td><span class="tag tag--d">Weak</span> but not useless</td></tr>
           </tbody>
         </table>
       </div>
       <p>All thresholds are starting points from the literature, not tuned values. Every one gets
         re-tuned against our own wrist data in Phase&nbsp;2.</p>
 
-      <h3>Gyro-on-demand â€” the idea that makes wrist viable</h3>
+      <h3>Gyro-on-demand — the idea that makes wrist viable</h3>
       <p>Angular velocity carries much of the fall signature at the wrist. But the gyro draws
         <strong>milliamps</strong> against tens of <strong>microamps</strong> for the
         accelerometer, so running it continuously destroys the battery target outright. The
         resolution is that you never have to:</p>
-      <pre>accel always on, hardware free-fall IRQ armed        <i>ÂµA</i>
-      â”‚  INT1 fires
-      â–¼
-MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gyro off â†’ classify â†’ sleep</pre>
+      <pre>accel always on, hardware free-fall IRQ armed        <i>µA</i>
+      │  INT1 fires
+      ▼
+MCU wakes → <b>powers gyro</b> → captures 3–5 s → gyro off → classify → sleep</pre>
       <p>Because the IMU's FIFO has already been batching accelerometer data, this also recovers
-        the <strong>pre-trigger</strong> samples â€” the free-fall phase that happened before the
+        the <strong>pre-trigger</strong> samples — the free-fall phase that happened before the
         MCU woke, which a naive wake-on-interrupt design throws away.</p>
 
       <h3>What must not trigger it</h3>
       <p>The confounder list is longer at the wrist than anywhere else, which is precisely why
-        S2 is hard here: clapping Â· waving Â· gesturing while talking Â· brushing teeth Â· washing
-        hands Â· putting a hand down hard on a table Â· pushing up out of a chair by the armrests Â·
-        taking the watch off and dropping it Â· <strong>using a walking stick or frame</strong> Â·
-        leaning weight on the arm Â· reaching to a high shelf.</p>
+        S2 is hard here: clapping · waving · gesturing while talking · brushing teeth · washing
+        hands · putting a hand down hard on a table · pushing up out of a chair by the armrests ·
+        taking the watch off and dropping it · <strong>using a walking stick or frame</strong> ·
+        leaning weight on the arm · reaching to a high shelf.</p>
 
       <div class="note note--alert">
         <span class="note__t">The one that will bite</span>
@@ -507,7 +508,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         fires. Documented as a known v1 gap rather than papered over.</p>
     </section>
 
-    <!-- 06 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 06 ───────────────────────────────────────────────────────────── -->
     <section id="s6" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -515,13 +516,13 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
       </div>
 
       <pre>IMPACT
-  â”œâ”€ t+0s     buzzer + LED, <b>30 s cancel countdown starts</b>
-  â”œâ”€ t+0s     BLE â†’ <i>PRE_ALERT</i> â†’ cloud          â† sent immediately
-  â”œâ”€ button   â†’ <i>CANCELLED</i> â†’ stand down
-  â”œâ”€ t+30s    no cancel â†’ <i>FALL_CONFIRMED</i>
-  â”œâ”€ cloud    â†’ caregiver 1  (push + SMS)
-  â”œâ”€ t+3min   no ack â†’ caregiver 2
-  â””â”€ t+6min   no ack â†’ emergency contact</pre>
+  ├─ t+0s     buzzer + LED, <b>30 s cancel countdown starts</b>
+  ├─ t+0s     BLE → <i>PRE_ALERT</i> → cloud          ← sent immediately
+  ├─ button   → <i>CANCELLED</i> → stand down
+  ├─ t+30s    no cancel → <i>FALL_CONFIRMED</i>
+  ├─ cloud    → caregiver 1  (push + SMS)
+  ├─ t+3min   no ack → caregiver 2
+  └─ t+6min   no ack → emergency contact</pre>
 
       <h3>Two things here are not optional</h3>
       <p><strong>PRE_ALERT goes out before the countdown resolves.</strong> If the device is
@@ -531,14 +532,14 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         the ones you fail to report.</p>
       <p><strong>The 30-second cancel window is what makes S2 survivable.</strong> It does not
         reduce the false-positive rate; it collapses the <em>cost</em> from "caregiver panic at
-        3 am" to "annoying beep the wearer silences" â€” and that is what determines whether the
+        3 am" to "annoying beep the wearer silences" — and that is what determines whether the
         device stays worn. The wrist choice pays off here: the button is always reachable with
         the opposite hand.</p>
 
       <h3>Event schema</h3>
       <pre>{
   "device_id": "xiao-0001",
-  "event_id":  "<i>uuid-or-counter</i>",          <b>â† idempotent dedup</b>
+  "event_id":  "<i>uuid-or-counter</i>",          <b>← idempotent dedup</b>
   "type":      "PRE_ALERT | FALL_CONFIRMED | CANCELLED | HEARTBEAT",
   "ts_device": 1754049600,
   "signature": { "freefall_ms": 180, "impact_g": 3.4,
@@ -551,7 +552,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         the field it is the difference between diagnosing it and guessing.</p>
     </section>
 
-    <!-- 07 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 07 ───────────────────────────────────────────────────────────── -->
     <section id="s7" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -566,11 +567,11 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         <table>
           <thead><tr><th>Item</th><th class="m">Estimated average</th></tr></thead>
           <tbody>
-            <tr><td class="k">nRF52840 System ON idle, RAM retained</td><td class="m">~2 ÂµA</td></tr>
-            <tr><td class="k">LSM6DS3TR-C low-power accel</td><td class="m">~40 ÂµA</td></tr>
-            <tr><td class="k">Gyro, duty-cycled on candidates</td><td class="m">~1â€“5 ÂµA</td></tr>
-            <tr><td class="k">BLE advertising / long interval</td><td class="m">~10â€“30 ÂµA</td></tr>
-            <tr><td class="k">Subtotal</td><td class="m">~55â€“80 ÂµA</td></tr>
+            <tr><td class="k">nRF52840 System ON idle, RAM retained</td><td class="m">~2 µA</td></tr>
+            <tr><td class="k">LSM6DS3TR-C low-power accel</td><td class="m">~40 µA</td></tr>
+            <tr><td class="k">Gyro, duty-cycled on candidates</td><td class="m">~1–5 µA</td></tr>
+            <tr><td class="k">BLE advertising / long interval</td><td class="m">~10–30 µA</td></tr>
+            <tr><td class="k">Subtotal</td><td class="m">~55–80 µA</td></tr>
             <tr><td class="k">Regulator + charge IC quiescent</td><td class="m">unmeasured</td></tr>
           </tbody>
         </table>
@@ -580,12 +581,12 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         <span class="note__t">Do not believe these numbers</span>
         <p>Every figure above is derived from datasheets, not measured. The XIAO's onboard LDO
           and BQ25101 have quiescent draw that can dominate the entire budget. Measuring real
-          board sleep current is a <strong>Phase 0</strong> task, not a Phase 6 one â€” if it lands
-          at 200 ÂµA you need to know before designing an enclosure around a battery size.</p>
+          board sleep current is a <strong>Phase 0</strong> task, not a Phase 6 one — if it lands
+          at 200 µA you need to know before designing an enclosure around a battery size.</p>
       </div>
     </section>
 
-    <!-- 08 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 08 ───────────────────────────────────────────────────────────── -->
     <section id="s8" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -595,28 +596,28 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
       <p>Versions below were read from real build output.</p>
 
       <dl class="kv">
-        <dt>SDK</dt><dd>nRF Connect SDK v3.1.1 â€” C:\ncs\v3.1.1</dd>
+        <dt>SDK</dt><dd>nRF Connect SDK v3.1.1 — C:\ncs\v3.1.1</dd>
         <dt>RTOS</dt><dd>Zephyr 4.1.99 (ncs-v3.1.1)</dd>
-        <dt>Toolchain</dt><dd>Zephyr SDK 0.17.0 â€” bundle c1a76fddb2</dd>
-        <dt>Compiler</dt><dd>arm-zephyr-eabi-gcc 12.2.0 Â· GNU ld 2.38</dd>
+        <dt>Toolchain</dt><dd>Zephyr SDK 0.17.0 — bundle c1a76fddb2</dd>
+        <dt>Compiler</dt><dd>arm-zephyr-eabi-gcc 12.2.0 · GNU ld 2.38</dd>
         <dt>C library</dt><dd>picolibc</dd>
         <dt>Build</dt><dd>CMake 3.21.0 + Ninja, driven by west 1.4.0</dd>
         <dt>Devicetree</dt><dd>dtc 1.4.7</dd>
         <dt>Board</dt><dd>xiao_ble/nrf52840/sense</dd>
-        <dt>Flashing</dt><dd>UF2 mass storage â€” no debugger required</dd>
+        <dt>Flashing</dt><dd>UF2 mass storage — no debugger required</dd>
       </dl>
 
       <div class="note">
         <span class="note__t">Why tools/build.ps1 exists</span>
         <p><code>cmake</code>, <code>ninja</code>, <code>dtc</code> and the ARM compiler are
-          <strong>not on PATH</strong> â€” they live only inside the toolchain bundle, so a bare
+          <strong>not on PATH</strong> — they live only inside the toolchain bundle, so a bare
           <code>west build</code> in a fresh shell fails. The script sets the environment every
           time, so a build never depends on a hand-configured shell.</p>
       </div>
 
       <pre><b>.\tools\build.ps1</b>                    <i># product firmware at repo root</i>
 <b>.\tools\build.ps1</b> blink -Pristine    <i># after prj.conf / overlay edits</i>
-<b>.\tools\build.ps1</b> mic_record -Flash  <i># waits 60 s â€” double-tap RST</i></pre>
+<b>.\tools\build.ps1</b> mic_record -Flash  <i># waits 60 s — double-tap RST</i></pre>
 
       <p>Flashing is a two-step dance: run with <code>-Flash</code>, then <strong>double-tap
         RST</strong> (two firm presses about a quarter-second apart). The
@@ -624,7 +625,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         it automatically.</p>
     </section>
 
-    <!-- 09 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 09 ───────────────────────────────────────────────────────────── -->
     <section id="s9" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -636,46 +637,49 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         not part of the product build.</p>
 
       <pre>falldetect-gkl/
-â”œâ”€â”€ <b>CMakeLists.txt</b>          <i>product firmware â€” root project</i>
-â”œâ”€â”€ <b>prj.conf</b>
-â”œâ”€â”€ <b>src/main.c</b>
-â”œâ”€â”€ doc/                    <i>this handbook</i>
-â”œâ”€â”€ apps/                   <i>bench instruments only</i>
-â”‚   â”œâ”€â”€ blink/              <i>Phase 0 bring-up</i>
-â”‚   â””â”€â”€ mic_record/         <i>PDM recorder + overlay</i>
-â”œâ”€â”€ tools/
-â”‚   â”œâ”€â”€ build.ps1           <i>build + flash driver</i>
-â”‚   â”œâ”€â”€ mic_gui.py          <i>recorder GUI</i>
-â”‚   â””â”€â”€ mic_gui.ps1
-â”œâ”€â”€ build/                  <i>generated, disposable</i>
-â””â”€â”€ recordings/             <i>captured .wav</i></pre>
+├── <b>CMakeLists.txt</b>          <i>product firmware — root project</i>
+├── <b>prj.conf</b>
+├── <b>src/main.c</b>
+├── doc/                    <i>this handbook</i>
+├── apps/                   <i>bench instruments only</i>
+│   ├── blink/              <i>Phase 0 bring-up; BLE OTA proved out here</i>
+│   ├── datalog/            <i>labelled data-collection rig</i>
+│   └── mic_record/         <i>PDM recorder + overlay</i>
+├── tools/                  <i>see tools/README.md</i>
+│   ├── build.ps1           <i>build + flash driver</i>
+│   ├── fd_studio.ps1       <i>launch FD Studio — the tool</i>
+│   ├── fd_studio/          <i>FD Studio GUI package</i>
+│   ├── scripts/            <i>OTA push, BLE scan</i>
+│   └── bench/              <i>older single-purpose GUIs</i>
+├── build/                  <i>generated, disposable</i>
+└── recordings/             <i>captured .wav</i></pre>
 
-      <p>Adding a bench app takes three files â€” <code>CMakeLists.txt</code>,
-        <code>prj.conf</code>, <code>src/main.c</code> â€” plus an optional
+      <p>Adding a bench app takes three files — <code>CMakeLists.txt</code>,
+        <code>prj.conf</code>, <code>src/main.c</code> — plus an optional
         <code>boards/xiao_ble_nrf52840_sense.overlay</code> when devicetree needs changing. That
         filename is the board target with <code>/</code> replaced by <code>_</code>, and west
         picks it up automatically.</p>
     </section>
 
-    <!-- 10 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 10 ───────────────────────────────────────────────────────────── -->
     <section id="s10" class="view">
       <div class="sechead">
         <div class="bar"></div>
         <div class="row"><span class="num">10</span><h2>Roadmap</h2></div>
       </div>
 
-      <p>These phases are a genuine sequence â€” each depends on the one before, and each has an
+      <p>These phases are a genuine sequence — each depends on the one before, and each has an
         explicit verify step. No phase starts before the previous one passes.</p>
 
       <div class="phases">
         <div class="ph ph--done"><span class="ph__n">00</span>
           <div class="ph__b"><h4>Bring-up</h4>
-            <p>Toolchain, board target, blink, UF2 flash path. <em>Verified â€” LED blinking, Sense variant confirmed.</em></p></div>
+            <p>Toolchain, board target, blink, UF2 flash path. <em>Verified — LED blinking, Sense variant confirmed.</em></p></div>
           <span class="tag tag--v">Done</span></div>
 
         <div class="ph ph--now"><span class="ph__n">01</span>
           <div class="ph__b"><h4>Data collection rig</h4>
-            <p>IMU probe â†’ 208 Hz stream â†’ axis convention â†’ QSPI logging. Falls on a crash mat plus 30 h of wrist ADL.</p></div>
+            <p>IMU probe → 208 Hz stream → axis convention → QSPI logging. Falls on a crash mat plus 30 h of wrist ADL.</p></div>
           <span class="tag tag--d">Current</span></div>
 
         <div class="ph"><span class="ph__n">02</span>
@@ -685,40 +689,40 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
 
         <div class="ph"><span class="ph__n">03</span>
           <div class="ph__b"><h4>On-device detection</h4>
-            <p>Free-fall IRQ â†’ gyro power-up â†’ FIFO â†’ classify. Buzzer, LED, cancel button, countdown.</p></div>
-          <span class="tag">â€”</span></div>
+            <p>Free-fall IRQ → gyro power-up → FIFO → classify. Buzzer, LED, cancel button, countdown.</p></div>
+          <span class="tag">—</span></div>
 
         <div class="ph"><span class="ph__n">04</span>
           <div class="ph__b"><h4>BLE + home hub</h4>
             <p>GATT, bonding, store-and-forward on QSPI, retry-until-ack. Coverage survey of the real home.</p></div>
-          <span class="tag">â€”</span></div>
+          <span class="tag">—</span></div>
 
         <div class="ph"><span class="ph__n">05</span>
           <div class="ph__b"><h4>Cloud + escalation</h4>
             <p>Ingest, dedup, escalation ladder, caregiver notification, heartbeat watchdog.</p></div>
-          <span class="tag">â€”</span></div>
+          <span class="tag">—</span></div>
 
         <div class="ph"><span class="ph__n">06</span>
           <div class="ph__b"><h4>Power, enclosure, field trial</h4>
             <p>Optimise to S4. Wrist enclosure and strap. 14-day wear trial on a real user.</p></div>
-          <span class="tag">â€”</span></div>
+          <span class="tag">—</span></div>
 
         <div class="ph"><span class="ph__n">07</span>
-          <div class="ph__b"><h4>Voice â€” deferred</h4>
+          <div class="ph__b"><h4>Voice — deferred</h4>
             <p>Post-fall audio confirmation or keyword spotting. A bench recorder already exists in <code>apps/mic_record</code>.</p></div>
           <span class="tag">Deferred</span></div>
       </div>
 
       <div class="note note--brass">
         <span class="note__t">Where the risk actually sits</span>
-        <p>Phases 1â€“2 <em>are</em> the project; everything after is comparatively mechanical. The
+        <p>Phases 1–2 <em>are</em> the project; everything after is comparatively mechanical. The
           common failure mode is six weeks of elegant firmware and BLE plumbing, then discovering
-          the detector fires every time the user leans on a walking frame â€” with no dataset to
+          the detector fires every time the user leans on a walking frame — with no dataset to
           diagnose it against.</p>
       </div>
     </section>
 
-    <!-- 11 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 11 ───────────────────────────────────────────────────────────── -->
     <section id="s11" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -736,7 +740,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
             <tr><td class="k"><span class="sev sev--md"></span>Board quiescent current</td><td>Misses S4</td><td>Measure in Phase 0, before enclosure design</td></tr>
             <tr><td class="k"><span class="sev sev--md"></span>Hub power cut / WiFi down</td><td>Whole system offline</td><td>UPS on the hub; liveness watchdog</td></tr>
             <tr><td class="k"><span class="sev sev--md"></span>BLE dead spots</td><td>Alert undelivered where falls happen</td><td>Bathroom/bedroom survey; store-and-forward on QSPI</td></tr>
-            <tr><td class="k"><span class="sev sev--md"></span>Clipping at low full-scale</td><td>Dataset silently unusable</td><td>Â±16 g and Â±2000 dps for all collection</td></tr>
+            <tr><td class="k"><span class="sev sev--md"></span>Clipping at low full-scale</td><td>Dataset silently unusable</td><td>±16 g and ±2000 dps for all collection</td></tr>
             <tr><td class="k"><span class="sev sev--lo"></span>Slow slumps</td><td>Missed falls</td><td>Documented v1 gap, or a low-and-still detector</td></tr>
           </tbody>
         </table>
@@ -749,7 +753,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
         coverage limits, and a documented fallback when the system fails.</p>
     </section>
 
-    <!-- 12 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
+    <!-- 12 ───────────────────────────────────────────────────────────── -->
     <section id="s12" class="view">
       <div class="sechead">
         <div class="bar"></div>
@@ -763,12 +767,12 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
           <thead><tr><th>Trap</th><th>What actually happens</th></tr></thead>
           <tbody>
             <tr><td class="k">UF2 volume race</td><td>Windows assigns the drive letter <em>before</em> the volume accepts writes. Copying immediately fails and the board silently stays in the bootloader while the tool reports success.</td></tr>
-            <tr><td class="k">1200-baud touch â‰  UF2 mode</td><td>It enters serial-DFU-only mode with no mass-storage drive. Only a physical double-tap gives the drag-and-drop drive.</td></tr>
+            <tr><td class="k">1200-baud touch ≠ UF2 mode</td><td>It enters serial-DFU-only mode with no mass-storage drive. Only a physical double-tap gives the drag-and-drop drive.</td></tr>
             <tr><td class="k">Zephyr has no 1200-baud touch</td><td>That was the Arduino firmware's feature. Once Zephyr is flashed, <strong>RST is the only way back to the bootloader.</strong></td></tr>
-            <tr><td class="k">PDM is doubly disabled</td><td><code>pdm0</code> is <code>status = "disabled"</code> in the SoC dtsi, <em>and</em> the mic rail has no <code>regulator-boot-on</code> â€” unlike the IMU rail, which does.</td></tr>
+            <tr><td class="k">PDM is doubly disabled</td><td><code>pdm0</code> is <code>status = "disabled"</code> in the SoC dtsi, <em>and</em> the mic rail has no <code>regulator-boot-on</code> — unlike the IMU rail, which does.</td></tr>
             <tr><td class="k">Console shares the audio port</td><td>A single <code>printk</code> mid-stream injects ASCII into the PCM. Console, logging and boot banner are all disabled in <code>mic_record</code>.</td></tr>
-            <tr><td class="k">Driver has no embedded functions</td><td>Zephyr's <code>lsm6dsl</code> driver asserts <code>SENSOR_TRIG_DATA_READY</code> â€” free-fall, wake-up and FIFO need our own register layer.</td></tr>
-            <tr><td class="k">SDK Python can't run the GUI</td><td><code>import tkinter</code> succeeds but <code>tkinter.ttk</code> fails â€” partial Tk install. Use the system Python.</td></tr>
+            <tr><td class="k">Driver has no embedded functions</td><td>Zephyr's <code>lsm6dsl</code> driver asserts <code>SENSOR_TRIG_DATA_READY</code> — free-fall, wake-up and FIFO need our own register layer.</td></tr>
+            <tr><td class="k">SDK Python can't run the GUI</td><td><code>import tkinter</code> succeeds but <code>tkinter.ttk</code> fails — partial Tk install. Use the system Python.</td></tr>
             <tr><td class="k">PowerShell <code>2&gt;&amp;1</code> on native exes</td><td>PS 5.1 wraps west's normal stderr progress as error records and aborts the script.</td></tr>
             <tr><td class="k">-Pristine after config edits</td><td>Zephyr does not reliably pick up <code>prj.conf</code> or overlay changes on an incremental build.</td></tr>
           </tbody>
@@ -782,7 +786,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
     </nav>
 
     <footer class="foot">
-      falldetect-gkl Â· firmware handbook Â· hardware facts verified against NCS v3.1.1 and the device itself
+      falldetect-gkl · firmware handbook · hardware facts verified against NCS v3.1.1 and the device itself
     </footer>
 
   </main>
@@ -790,8 +794,8 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
 
 <script>
 (function () {
-  /* â”€â”€ hero: accelerometer signature of a fall â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
-  var W = 1000, H = 280, BASE = 232, GPX = 50; /* y = BASE - g*GPX  â†’ 0..4 g */
+  /* ── hero: accelerometer signature of a fall ─────────────────────────── */
+  var W = 1000, H = 280, BASE = 232, GPX = 50; /* y = BASE - g*GPX  → 0..4 g */
   var frac = function (x) { return x - Math.floor(x); };
   var noise = function (i) { return frac(Math.sin(i * 12.9898) * 43758.5453) * 2 - 1; };
 
@@ -850,7 +854,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
   var svg = document.getElementById('sig');
   if (svg) svg.innerHTML = s;
 
-  /* â”€â”€ tabs: one panel at a time, addressable by hash â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  /* ── tabs: one panel at a time, addressable by hash ──────────────────── */
   var links = Array.prototype.slice.call(document.querySelectorAll('.rail a'));
   var order = links.map(function (a) { return a.getAttribute('href').slice(1); });
   var titles = links.map(function (a) {
@@ -900,7 +904,7 @@ MCU wakes â†’ <b>powers gyro</b> â†’ captures 3â€“5 s â†’ gy
   window.addEventListener('hashchange', fromHash);
   fromHash();
 
-  /* â”€â”€ theme switch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+  /* ── theme switch ────────────────────────────────────────────────────── */
   var root = document.documentElement;
   var btns = Array.prototype.slice.call(document.querySelectorAll('.theme button'));
 
