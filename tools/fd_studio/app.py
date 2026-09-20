@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         self._notice = ""
         self._scanning = False
         self.alarm = Alarm()
+        # Guided calibration: ticks remaining in the hold, or 0.
+        self._cal_hold = 0
+        self._cal_deadline = 0
         self._spins: dict[str, QSpinBox] = {}
 
         self._scan = _ScanWorker()
@@ -540,7 +543,95 @@ class MainWindow(QMainWindow):
         self.btn_cal.setEnabled(True)
         self.btn_rec.setEnabled(True)
 
+    #: Ticks of steady holding required. The GUI runs at ~30 Hz, so this is
+    #: about three seconds - long enough that a momentary steady instant
+    #: cannot pass, short enough that nobody gives up waiting.
+    CAL_HOLD_TICKS = 90
+
+    #: Give up after ~25 s of never achieving the hold. Without this, starting
+    #: a calibration and then walking away leaves the tool stuck on "Hold
+    #: still" forever with the button disabled and no way out but disconnect.
+    CAL_TIMEOUT_TICKS = 750
+
     def calibrate(self) -> None:
+        """Begin a guided capture rather than sampling one instant.
+
+        The old behaviour took whatever the last half-second happened to look
+        like at the moment of the click. Press it mid-sway and you got a
+        reference that was silently wrong - and every tilt reading afterwards
+        was measured from it. Now the user must hold steady for the whole
+        window, and sees how they are doing while they do it.
+        """
+        if self.link is None:
+            self.say("connect to the device before calibrating")
+            return
+        self._cal_hold = self.CAL_HOLD_TICKS
+        self._cal_deadline = self.CAL_TIMEOUT_TICKS
+        self.btn_cal.setEnabled(False)
+        self.say("calibrating — stand upright and still...")
+
+    def _cal_status(self, msg: str) -> None:
+        """Live calibration feedback, deliberately NOT routed through notify().
+
+        notify() writes to the Log tab, and this runs at ~30 Hz - three
+        seconds of holding would bury the log the user copies out under 90
+        lines of "Hold still". Only the start and the outcome get logged.
+        """
+        self._notice = msg
+        self.user_tab.notice = msg
+        self.lbl_status.setText(msg or "ready")
+
+    def _abandon_calibration(self, why: str) -> None:
+        self._cal_hold = 0
+        self._cal_deadline = 0
+        self.user_tab.cal_progress = None
+        self._cal_status("")
+        # Only re-enable if there is still a device to calibrate against.
+        self.btn_cal.setEnabled(self.link is not None)
+        self.say(why)
+
+    def _tick_calibration(self) -> None:
+        """One step of the guided hold. Any wobble restarts the count."""
+        if self._cal_hold <= 0:
+            return
+
+        # The link can die mid-hold (disconnect, or a device error that tears
+        # it down). Without this the count keeps running against stale data
+        # and the User tab sticks on "Hold still" with nothing able to clear
+        # it - the calibrate button is disabled by the same teardown.
+        if self.link is None:
+            self._abandon_calibration("calibration abandoned — device "
+                                      "disconnected")
+            return
+
+        self._cal_deadline -= 1
+        if self._cal_deadline <= 0:
+            self._abandon_calibration("calibration gave up — never held still "
+                                      "long enough. Stand upright and retry.")
+            return
+
+        ready, reason, steady = self.engine.calibration_check()
+        if not ready:
+            # Restart, not abort: someone steadying themselves should be able
+            # to just keep standing there rather than press the button again.
+            self._cal_hold = self.CAL_HOLD_TICKS
+            self.user_tab.cal_progress = reason
+            self._cal_status(reason)
+            return
+
+        self._cal_hold -= 1
+        secs = self._cal_hold / 30.0
+        self.user_tab.cal_progress = f"Hold still… {secs:.0f}s"
+        self._cal_status(f"Hold still… {secs:.0f}s   (steadiness {steady:.0%})")
+
+        if self._cal_hold > 0:
+            return
+
+        self.btn_cal.setEnabled(True)
+        self.user_tab.cal_progress = None
+        self._finish_calibration(steady)
+
+    def _finish_calibration(self, steady: float) -> None:
         if self.engine.calibrate_upright():
             # Zero the heading as well, so the object returns to a KNOWN pose
             # rather than to "upright, but still rotated by however much the
@@ -548,8 +639,9 @@ class MainWindow(QMainWindow):
             # starting point: X right, Y front, Z up.
             self.engine.reset_heading()
             self.engine.reset_peaks()
-            self.say("calibrated — X right, Y front, Z up. "
-                     "Move now and the object follows.")
+            self._cal_status("")
+            self.say(f"calibrated (steadiness {steady:.0%}) — X right, Y front, "
+                     "Z up. Move now and the object follows.")
         else:
             self.say("calibration failed — stand still and upright, then retry")
 
@@ -750,6 +842,8 @@ class MainWindow(QMainWindow):
                 self._set_conn_state(f"Stalled {int(st['stale'])}s", "danger")
             else:
                 self._set_conn_state(f"Live · {st['rate']:.0f} Hz", "success")
+
+        self._tick_calibration()
 
         eng = self.engine
         now = time.time()

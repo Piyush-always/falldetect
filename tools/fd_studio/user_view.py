@@ -285,6 +285,9 @@ class UserTab(QWidget):
         self._on_alarm = on_alarm
         # Lets the button label reflect reality rather than guess.
         self._is_sounding = None
+        # Message shown while a guided calibration hold is running, else
+        # None. Set by MainWindow.
+        self.cal_progress = None
         self._get_engine = get_engine
         self._get_link = get_link
         self._fall_started: float | None = None
@@ -480,6 +483,16 @@ class UserTab(QWidget):
         # return early - which silently made "Test alarm" do nothing.
         if self._test_fall:
             self._render_alert(now)
+            return
+
+        # A calibration hold in progress outranks the ordinary state: it is
+        # the thing the user is actively doing, and they need feedback while
+        # doing it rather than a verdict afterwards.
+        if self.cal_progress is not None:
+            self.status.set_state("Hold still", self.cal_progress, "accent", True)
+            self.countdown.setVisible(False)
+            self.hint.setText("Stand upright and still. Any movement restarts "
+                              "the count.")
             return
 
         if link is None:

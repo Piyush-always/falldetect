@@ -141,6 +141,11 @@ class Engine:
 
         self._mag_win = deque(maxlen=odr_hz)          # 1 s for motion variance
         self.trace = deque(maxlen=odr_hz * 12)        # 12 s for the plot
+        # RAW accel vectors, for calibration. Deliberately not the smoothed
+        # _g: that is an EMA with a 0.5 s time constant, so it is quiet by
+        # construction. Judging steadiness from it measures the filter rather
+        # than the person - a slow lean, which is exactly what ruins a
+        # calibration, is the part the filter removes best.
         self._recent_g = deque(maxlen=odr_hz)         # 1 s for calibration
 
         self.steps = 0
@@ -175,20 +180,63 @@ class Engine:
     def calibrated(self) -> bool:
         return self.g_ref is not None
 
+    #: How far the raw accel vector may wander over 1 s, in milli-g, and still
+    #: count as "standing still".
+    #:
+    #: Measured from data/neck (2026-09-20): a device at rest sits at 5-10 mg,
+    #: genuine walking runs 150-250 mg. 35 mg is several times resting noise
+    #: and several times below walking, so nothing delicate rests on the exact
+    #: value. Synthetic leans put a +/-4 deg sway at ~19 mg (accepted) and
+    #: +/-12 deg at ~56 mg (rejected), which is roughly the line we want:
+    #: a person can breathe and shift their weight, but not sway.
+    CAL_MAX_SPREAD_MG = 35.0
+
+    def calibration_check(self) -> tuple[bool, str, float]:
+        """Could we calibrate right now, why not, and how steady are we?
+
+        Returns (ready, reason, steadiness 0..1). Split out from
+        calibrate_upright so the UI can show this LIVE, before the user
+        commits - "hold still, nearly there" is useful, "calibration failed"
+        after the fact is not.
+        """
+        if len(self._recent_g) < self.odr // 2:
+            return False, "Waiting for data from the device...", 0.0
+
+        arr = np.array(self._recent_g)
+        mean = arr.mean(axis=0)
+        norm = float(np.linalg.norm(mean))
+
+        if norm < 700.0 or norm > 1300.0:
+            # Mean magnitude far from 1 g means real acceleration on top of
+            # gravity - they are moving, not standing.
+            return False, "Too much movement — stand still and upright", 0.0
+
+        # THE CHECK THAT WAS MISSING. Mean magnitude alone passes happily
+        # while someone sways: the vector wanders but its average length stays
+        # near 1 g, so a direction averaged over the sway gets locked in and
+        # every later tilt reading is measured from a reference that was never
+        # true. Spread catches that; magnitude cannot.
+        spread = float(np.linalg.norm(arr - mean, axis=1).mean())
+        steadiness = max(0.0, min(1.0, 1.0 - spread / self.CAL_MAX_SPREAD_MG))
+
+        if spread > self.CAL_MAX_SPREAD_MG:
+            return False, "Hold still — you are swaying", steadiness
+
+        return True, "Ready", steadiness
+
     def calibrate_upright(self) -> bool:
         """Capture the current gravity direction as 'upright'.
 
-        The wearer must be standing still. Returns False if there is not yet
-        enough clean data, rather than locking in a reference taken mid-stride.
+        Refuses unless calibration_check() passes, so a reference is never
+        taken mid-stride or mid-sway.
         """
-        if len(self._recent_g) < self.odr // 2:
+        ready, _reason, _steady = self.calibration_check()
+        if not ready:
             return False
+
         arr = np.array(self._recent_g)
         mean = arr.mean(axis=0)
-        norm = np.linalg.norm(mean)
-        if norm < 700 or norm > 1300:
-            return False  # not ~1 g: they were moving
-        self.g_ref = mean / norm
+        self.g_ref = mean / float(np.linalg.norm(mean))
         return True
 
     def clear_calibration(self) -> None:
@@ -290,7 +338,7 @@ class Engine:
         self.mag = float(np.linalg.norm(a))
 
         self._g = self._alpha * self._g + (1.0 - self._alpha) * a
-        self._recent_g.append(self._g.copy())
+        self._recent_g.append(a)
 
         if self.g_ref is not None:
             gn = np.linalg.norm(self._g)

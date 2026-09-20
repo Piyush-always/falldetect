@@ -35,9 +35,22 @@ orientation stage can never fire.
    differently gives a different reference.
 2. Open FD Studio → **Scan** → pick `falldetect-datalog` → **Connect**.
 3. **Stand up straight and still.** Not walking, not leaning.
-4. Click **Calibrate upright**.
+4. Click **Calibrate upright**, then keep standing. It holds you there for
+   **three seconds**, counting down on screen, and takes the reference only
+   after the whole three seconds were steady. Wobble and the count restarts —
+   you do not need to press anything again, just settle.
 5. Confirm the Debug tab shows tilt near **0°** while you stand, and that it
    rises when you lean forward.
+
+The hold is the point. A single-instant capture will happily lock in a
+reference taken mid-sway: the gravity vector still averages to about 1 g, so
+it looks valid, and every tilt reading afterwards is measured from a direction
+you were never actually standing in. Measured on this device, standing still
+reads 5–10 mg of wander and walking reads 150–250 mg; the gate sits at 35 mg,
+so breathing and shifting your weight are fine and swaying is not.
+
+The reported **steadiness** is how still you were, not how correct the result
+is. 100% on a device lying on a desk is a perfect calibration of a desk.
 
 Re-calibrate if you take the device off and put it back on. The cord twists.
 
