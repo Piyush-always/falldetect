@@ -3,7 +3,7 @@
     Package FD Studio as a single shareable Windows exe.
 
 .DESCRIPTION
-    Produces dist\FD Studio.exe - no Python needed on the target PC, only
+    Produces tools\FD Studio.exe - no Python needed on the target PC, only
     Windows 10/11 with Bluetooth. The exe keeps data\ and firmware\ in the
     folder it is run from, so put it in its own folder before sharing.
 
@@ -40,9 +40,9 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
     --collect-submodules bleak `
     --collect-submodules winrt `
     --collect-submodules smpclient `
-    --distpath (Join-Path $repo 'dist') `
+    --distpath $PSScriptRoot `
     --workpath (Join-Path $repo 'build\pyinstaller') `
     --specpath (Join-Path $repo 'build\pyinstaller')
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
 
-Write-Host "Built: $(Join-Path $repo 'dist\FD Studio.exe')" -ForegroundColor Green
+Write-Host "Built: $(Join-Path $PSScriptRoot 'FD Studio.exe')" -ForegroundColor Green

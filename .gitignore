@@ -18,6 +18,3 @@ data/sisfall/
 
 # Working copy extracted from an archived release zip by the OTA tooling.
 firmware/*.extracted.bin
-
-# PyInstaller output - tools/build_exe.ps1
-dist/
