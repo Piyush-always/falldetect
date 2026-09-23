@@ -155,6 +155,15 @@ class CancelCountdown(QWidget):
         self._ring.set_fraction(max(0.0, seconds) / self._total)
         self._ring.set_label(str(int(math.ceil(max(0.0, seconds)))))
 
+    def set_expired(self, expired: bool) -> None:
+        """After the window: no ring to count, but the button must stay.
+
+        Hiding the whole widget at expiry left an alert nobody could
+        acknowledge - the only way out was starting a new test alarm.
+        """
+        self._ring.setVisible(not expired)
+        self.btn.setText("They're OK — dismiss" if expired else "I'm OK")
+
 
 class _Ring(QWidget):
     def __init__(self, parent=None):
@@ -454,16 +463,23 @@ class UserTab(QWidget):
         remaining = CANCEL_WINDOW_S - (now - self._fall_started)
 
         if remaining <= 0:
-            self.status.set_state("Help is being called" + tag,
-                                  "No response after 30 seconds.",
+            # Must not claim anyone is on the way: nothing is sent (see
+            # CANCEL_WINDOW_S). "Help is being called" told a family member
+            # they did not need to go and check, which is how someone gets
+            # hurt.
+            self.status.set_state("No response — go and check" + tag,
+                                  "This version does not contact anyone. "
+                                  "Someone needs to check on them in person.",
                                   "danger", True)
-            self.countdown.setVisible(False)
+            self.countdown.setVisible(True)
+            self.countdown.set_expired(True)
             return
 
         self.status.set_state("Possible fall" + tag,
                               "Press I'm OK if this was not a fall.",
                               "danger", True)
         self.countdown.setVisible(True)
+        self.countdown.set_expired(False)
         self.countdown.set_remaining(remaining)
 
     def _test_alarm(self) -> None:
@@ -471,10 +487,10 @@ class UserTab(QWidget):
 
         Doubles as a stop because an alarm with no visible way to silence it
         is a fault, not a feature. "I'm OK" only appears during the alert
-        screen; this button is always on the page.
+        screen; this button is always on the page. Any alert in progress,
+        real or test, is stood down rather than replaced by a new test.
         """
-        if self._test_fall or (self._is_sounding is not None
-                               and self._is_sounding()):
+        if self._alert_active():
             self._cancel_alert()
             return
         self._test_fall = True
@@ -482,6 +498,10 @@ class UserTab(QWidget):
         self._cancelled_until = 0.0
         if self._on_alarm is not None:
             self._on_alarm(True)
+
+    def _alert_active(self) -> bool:
+        return (self._test_fall or self._fall_started is not None
+                or (self._is_sounding is not None and self._is_sounding()))
 
     def _cancel_alert(self) -> None:
         self._fall_started = None
@@ -503,8 +523,7 @@ class UserTab(QWidget):
 
         # Recording strip. Shown only while recording, so it reads as a state
         # rather than as decoration.
-        sounding = self._is_sounding() if self._is_sounding else False
-        self.btn_test.setText("Stop alarm" if (sounding or self._test_fall)
+        self.btn_test.setText("Stop alarm" if self._alert_active()
                               else "Test alarm")
 
         rec = link is not None and getattr(link, "recording", False)

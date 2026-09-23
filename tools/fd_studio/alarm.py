@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 
 try:
     import winsound  # noqa: F401  (Windows only)
@@ -33,10 +34,15 @@ except ImportError:  # pragma: no cover - non-Windows
 #: alternating pair reads as an alarm and carries better through a room.
 _PATTERN = ((880, 350), (660, 350))
 
-#: Rough cap on how long the alarm sounds if nothing stops it. The cancel
-#: window is 30 s, so this outlasts it without beeping forever in a room full
-#: of people if something goes wrong.
-_MAX_CYCLES = 30
+#: Once the 30 s cancel window has passed with no response, the situation is
+#: worse, so the alarm gets MORE urgent, not quieter: faster and higher.
+_URGENT_PATTERN = ((1100, 180), (880, 180))
+_URGENT_AFTER_S = 30.0
+
+#: Sounds until stop(). This is only a backstop so a forgotten alarm cannot
+#: beep forever. The old 30-cycle cap was 21 s, which went silent BEFORE the
+#: 30 s window ended - the alarm stopped exactly when nobody had responded.
+_MAX_SECONDS = 600.0
 
 
 class Alarm:
@@ -72,8 +78,10 @@ class Alarm:
     def _run(self) -> None:
         import winsound
 
-        for _ in range(_MAX_CYCLES):
-            for freq, ms in _PATTERN:
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < _MAX_SECONDS:
+            urgent = time.monotonic() - t0 >= _URGENT_AFTER_S
+            for freq, ms in (_URGENT_PATTERN if urgent else _PATTERN):
                 if self._stop.is_set():
                     return
                 try:
