@@ -692,10 +692,17 @@ class MainWindow(QMainWindow):
             self.say("no data/ directory yet — record something first")
             return
 
-        results = replay_corpus(DATA_DIR, thresholds=self.engine.th)
+        notes: list = []
+        results = replay_corpus(DATA_DIR, thresholds=self.engine.th,
+                                notes=notes)
+        skipped = [n for n in notes if n[1].startswith("skipped")]
+        for path, msg in notes:
+            self.say(f"  {path.relative_to(DATA_DIR)}: {msg}")
         if not results:
-            self.say("no recorded sessions found under data/")
-            self.lbl_analysis.setText("no sessions found")
+            self.say(f"no scorable sessions under data/ "
+                     f"({len(skipped)} skipped)")
+            self.lbl_analysis.setText(f"no sessions scored, "
+                                      f"{len(skipped)} skipped")
             return
 
         s = summarize(results)
@@ -703,11 +710,12 @@ class MainWindow(QMainWindow):
         sens = f"{s['sensitivity']:.0%}" if s["sensitivity"] is not None else "n/a"
         spec = f"{s['specificity']:.0%}" if s["specificity"] is not None else "n/a"
         self.lbl_analysis.setText(
-            f"{s['n']} sessions — TP {c['TP']}  FN {c['FN']}  "
-            f"FP {c['FP']}  TN {c['TN']}\n"
+            f"{s['n']} scored, {len(skipped)} skipped — TP {c['TP']}  "
+            f"FN {c['FN']}  FP {c['FP']}  TN {c['TN']}\n"
             f"sensitivity {sens}  ·  specificity {spec}"
         )
-        self.say(f"replayed {s['n']} sessions — sensitivity {sens}, specificity {spec} "
+        self.say(f"replayed {s['n']} sessions ({len(skipped)} skipped) — "
+                 f"sensitivity {sens}, specificity {spec} "
                  f"(TP {c['TP']} FN {c['FN']} FP {c['FP']} TN {c['TN']})")
 
         # The misses are the actionable part — name them, not just count them.
@@ -728,13 +736,16 @@ class MainWindow(QMainWindow):
             self.say("no data/ directory yet — record something first")
             return
 
-        from .replay import observed
+        from .replay import label_of, observed
 
         rows = []
         for csv_path in sorted(DATA_DIR.rglob("*.csv")):
-            if "sisfall" in csv_path.parts:
+            # Same rule as the corpus replay, so the two buttons can never
+            # disagree about what a file is.
+            label = label_of(csv_path, DATA_DIR)
+            if label is None:
                 continue
-            samples, label = [], csv_path.parent.name
+            samples = []
             try:
                 with csv_path.open("r", encoding="ascii", errors="replace") as fh:
                     for raw in fh:
