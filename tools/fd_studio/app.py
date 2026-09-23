@@ -966,6 +966,9 @@ class MainWindow(QMainWindow):
             st = link.stats()
             if st["samples"] == 0:
                 self._set_conn_state("Connected, no data", "warning")
+            elif st["stale"] > 3.0 and st["link_stale"] <= 3.0:
+                self._set_conn_state(f"Sensor stopped {int(st['stale'])}s",
+                                     "danger")
             elif st["stale"] > 3.0:
                 self._set_conn_state(f"Stalled {int(st['stale'])}s", "danger")
             else:
@@ -991,6 +994,11 @@ class MainWindow(QMainWindow):
             self.plate.set_state("NO DATA",
                                  "nothing arriving — wrong port, or firmware "
                                  "not flashed", "danger", True)
+        elif stats and stats["stale"] > 3.0 and stats["link_stale"] <= 3.0:
+            self.plate.set_state("SENSOR STOPPED",
+                                 f"status arriving, no samples for "
+                                 f"{int(stats['stale'])}s — power-cycle the "
+                                 f"device", "danger", True)
         elif stats and stats["stale"] > 3.0:
             self.plate.set_state("LINK LOST",
                                  f"no samples for {int(stats['stale'])}s — reconnect",

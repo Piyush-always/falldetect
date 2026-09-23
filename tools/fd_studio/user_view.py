@@ -561,6 +561,18 @@ class UserTab(QWidget):
             self.countdown.setVisible(False)
             return
 
+        if stats["stale"] > 3.0 and stats["link_stale"] <= 3.0:
+            # Status lines still arriving, samples not: the link is fine and
+            # the motion sensor is not. Red, because nothing can be detected,
+            # and "move closer" would send them to fix the wrong thing.
+            self.status.set_state("Sensor stopped",
+                                  "The device is connected but its motion "
+                                  "sensor has stopped. Falls cannot be "
+                                  "detected. Switch the device off and on.",
+                                  "danger", True)
+            self.countdown.setVisible(False)
+            return
+
         if stats["stale"] > 3.0:
             self.status.set_state("Signal lost",
                                   "Move closer to the device, or check it is "
