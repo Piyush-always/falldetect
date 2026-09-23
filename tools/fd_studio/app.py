@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import queue
+import sys
 import threading
 import time
 from datetime import datetime
@@ -39,7 +40,9 @@ from .user_view import UserTab
 from .widgets import (AxisBars, BubbleLevel, CascadeStepper, OrientationView,
                       StatePlate, TracePlot)
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+# Frozen into an exe (tools/build_exe.ps1): data/ and firmware/ live beside it.
+ROOT = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent.parent)
 DATA_DIR = ROOT / "data"
 
 MOUNTS = ["neck", "wrist", "waist", "pocket"]

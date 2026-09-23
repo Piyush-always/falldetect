@@ -17,6 +17,7 @@ letting the Debug tab quietly show a frozen trace.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from pathlib import Path
 
@@ -27,7 +28,9 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
 
 from . import tokens as T
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+# Frozen into an exe (tools/build_exe.ps1): data/ and firmware/ live beside it.
+ROOT = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent.parent)
 from .ble_worker import BleWorker
 from .ota import (APP_BLE_NAMES, FIRMWARE_DIR, OtaError, archive_image,
                   find_signed_image, image_version, push_update,

@@ -13,6 +13,7 @@ cannot start reverts on the next reset instead of bricking the device.
 from __future__ import annotations
 
 import asyncio
+import sys
 
 from pathlib import Path
 from typing import Callable
@@ -24,7 +25,9 @@ from smpclient.requests.image_management import ImageStatesRead, ImageStatesWrit
 from smpclient.requests.os_management import ResetWrite
 from smpclient.transport.ble import SMPBLETransport
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+# Frozen into an exe (tools/build_exe.ps1): data/ and firmware/ live beside it.
+ROOT = (Path(sys.executable).parent if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parent.parent.parent)
 
 # Advertised name (CONFIG_BT_DEVICE_NAME) per app, since they differ and a
 # wrong guess silently targets the wrong board.
