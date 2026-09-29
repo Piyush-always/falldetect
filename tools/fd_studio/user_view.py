@@ -31,10 +31,10 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
 from . import tokens as T
 from .engine import Activity, Posture, Stage
 
-# Seconds the wearer has to cancel before this would escalate to a caregiver.
-# PROJECT_OUTLINE.md section 6. Nothing is actually sent anywhere yet - there
-# is no cloud in v1 scope - so this is an honest preview of the real flow, not
-# a simulation pretending to alert someone.
+# Seconds the wearer has to cancel before this escalates to the family's
+# phones (notify.py, when set up). PROJECT_OUTLINE.md section 6. Sent from the
+# laptop, so only while it is on and online - the screen says what was
+# actually sent, never more.
 CANCEL_WINDOW_S = 30
 
 
@@ -309,6 +309,20 @@ class UserTab(QWidget):
         # different code path rehearses nothing.
         self._test_fall = False
         self._cancelled_until = 0.0
+        # Phone alerts. This view decides WHEN (the cancel window ran out)
+        # and shows how it went; MainWindow owns the sending. Hooks:
+        #   on_escalate(source, started_at)
+        #   on_stand_down(escalated, by, started_at)   by: "screen"/"device"
+        self.on_escalate = None
+        self.on_stand_down = None
+        self.on_phone_settings = None
+        self.on_phone_test = None
+        # "", "sending", "sent", "failed" or "off" (not set up), plus the
+        # line to show with it. Set by MainWindow.
+        self.phone_state = ""
+        self.phone_detail = ""
+        self.phone_summary = ""
+        self._escalated = False
         self._activity: list[float] = []
         self._last_activity_push = 0.0
 
@@ -332,7 +346,7 @@ class UserTab(QWidget):
         self.status = BigStatus()
         lay.addWidget(self.status)
 
-        self.countdown = CancelCountdown(self._cancel_alert)
+        self.countdown = CancelCountdown(lambda: self._cancel_alert("screen"))
         lay.addWidget(self.countdown)
 
         lay.addWidget(self._caption("MOVEMENT TODAY"))
@@ -377,6 +391,24 @@ class UserTab(QWidget):
         self.btn_test = QPushButton("Test alarm")
         self.btn_test.clicked.connect(self._test_alarm)
         lay.addWidget(self.btn_test)
+
+        # Who gets told when nobody responds. On this tab, because "does
+        # anyone get alerted?" is the family's question, not a debug detail.
+        self.lbl_phone = QLabel("")
+        self.lbl_phone.setObjectName("Caption")
+        self.lbl_phone.setWordWrap(True)
+        self.lbl_phone.setAlignment(Qt.AlignHCenter)
+        lay.addWidget(self.lbl_phone)
+        prow = QHBoxLayout()
+        self.btn_phone_settings = QPushButton("Phone alert settings")
+        self.btn_phone_settings.clicked.connect(
+            lambda: self.on_phone_settings and self.on_phone_settings())
+        self.btn_phone_test = QPushButton("Send test to phones")
+        self.btn_phone_test.clicked.connect(
+            lambda: self.on_phone_test and self.on_phone_test())
+        prow.addWidget(self.btn_phone_settings)
+        prow.addWidget(self.btn_phone_test)
+        lay.addLayout(prow)
 
         lay.addStretch(1)
 
@@ -463,14 +495,28 @@ class UserTab(QWidget):
         remaining = CANCEL_WINDOW_S - (now - self._fall_started)
 
         if remaining <= 0:
-            # Must not claim anyone is on the way: nothing is sent (see
-            # CANCEL_WINDOW_S). "Help is being called" told a family member
-            # they did not need to go and check, which is how someone gets
-            # hurt.
-            self.status.set_state("No response — go and check" + tag,
-                                  "This version does not contact anyone. "
-                                  "Someone needs to check on them in person.",
-                                  "danger", True)
+            # Say exactly what was done, never more. "Help is being called"
+            # while nothing was sent told a family member they did not need
+            # to go and check, which is how someone gets hurt.
+            if self._test_fall:
+                title, sub = ("No response — go and check" + tag,
+                              "This was a test. No phones were alerted.")
+            elif self.phone_state == "sent":
+                title, sub = ("No response — family alerted",
+                              f"{self.phone_detail} Someone should still "
+                              f"check on them in person.")
+            elif self.phone_state == "sending":
+                title, sub = ("No response — alerting family",
+                              "Sending to phones now...")
+            elif self.phone_state == "failed":
+                title, sub = ("No response — alert NOT sent",
+                              f"{self.phone_detail} Go and check on them now.")
+            else:
+                title, sub = ("No response — go and check",
+                              "Phone alerts are not set up, so nobody was "
+                              "contacted. Someone needs to check on them in "
+                              "person.")
+            self.status.set_state(title, sub, "danger", True)
             self.countdown.setVisible(True)
             self.countdown.set_expired(True)
             return
@@ -503,15 +549,22 @@ class UserTab(QWidget):
         return (self._test_fall or self._fall_started is not None
                 or (self._is_sounding is not None and self._is_sounding()))
 
-    def _cancel_alert(self) -> None:
+    def _cancel_alert(self, by: str = "screen") -> None:
+        """Stand the alert down. `by` is who did it: "screen" or "device"."""
+        started, escalated, test = (self._fall_started, self._escalated,
+                                    self._test_fall)
         self._fall_started = None
         self._test_fall = False
+        self._escalated = False
+        self.phone_state, self.phone_detail = "", ""
         if self._on_alarm is not None:
             self._on_alarm(False)
         # Suppress re-alerting on the tail of the same event. The engine's own
         # refractory window covers the detector; this covers the UI.
         self._cancelled_until = time.time() + 10.0
         self.countdown.setVisible(False)
+        if started is not None and not test and self.on_stand_down is not None:
+            self.on_stand_down(escalated, by, started)
 
     # ── refresh ──────────────────────────────────────────────────────────────
     def tick(self) -> None:
@@ -520,6 +573,17 @@ class UserTab(QWidget):
         now = time.time()
 
         self._update_footer(link)
+        self.lbl_phone.setText(self.phone_summary)
+
+        # Escalation runs off the clock, not off drawing the screen. The
+        # phones must be alerted even when the render below is skipped - a
+        # fall that knocks the device out of range is exactly that case.
+        if (self._fall_started is not None and not self._test_fall
+                and not self._escalated
+                and now - self._fall_started >= CANCEL_WINDOW_S):
+            self._escalated = True
+            if self.on_escalate is not None:
+                self.on_escalate("fall", self._fall_started)
 
         # Recording strip. Shown only while recording, so it reads as a state
         # rather than as decoration.
@@ -541,10 +605,11 @@ class UserTab(QWidget):
         self.btn_record.setEnabled(link is not None)
         self.btn_record.setText("Stop and save" if rec else "Start recording")
 
-        # A rehearsal must run with no device attached. Practising the demo
-        # should not require hardware, and the connection branches below
-        # return early - which silently made "Test alarm" do nothing.
-        if self._test_fall:
+        # An alert in progress outranks every connection state. A rehearsal
+        # must run with no device attached, and a real alert must not vanish
+        # behind "Not connected" when the link drops mid-countdown - that hid
+        # the I'm OK button and the escalation result.
+        if self._test_fall or self._fall_started is not None:
             self._render_alert(now)
             return
 

@@ -162,3 +162,9 @@ corpus. Until both exist, a model is unfalsifiable. See OUTLINE §5.3.
 Cloud, hub, escalation ladder, voice/mic work, and the power trial are all
 explicitly deferred by the user. Local import/export only. Do not build toward
 them unless asked.
+
+Exception, asked for by the user (2026-09-29): **phone alerts from the
+laptop** — a Telegram message plus a CallMeBot Telegram voice call when the
+30 s cancel window expires (`tools/fd_studio/notify.py`). Free services, sent
+over the laptop's own internet; no server of ours. The wider escalation
+ladder is still deferred.

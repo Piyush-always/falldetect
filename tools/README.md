@@ -47,8 +47,38 @@ and neither exists in useful quantity. See `doc/PROJECT_OUTLINE.md` §5.3.
 | `ble_link.py` | BLE/NUS transport. What the app actually uses. |
 | `ota.py` | Firmware update over BLE. Shared with `scripts/ota_flash.py`. |
 | `replay.py` | Replays recorded sessions through the engine; sensitivity/specificity. |
+| `notify.py` | Phone alerts: Telegram message + Telegram voice call (CallMeBot). No Qt. |
 | `user_view.py`, `ota_view.py`, `widgets.py` | UI. |
 | `tokens.py` | Every colour and spacing value. Nothing else hardcodes either. |
+
+### Phone alerts
+
+When a possible fall gets no response for 30 s, FD Studio sends a Telegram
+message to the family and places a Telegram voice call that reads the alert
+aloud. Dismissing the alert afterwards sends an "all clear" message (no call).
+
+Setup, once (User tab):
+
+1. **Phone alert settings** opens `%APPDATA%\FD Studio\alerts.json` in Notepad.
+   It lives there, not in the repo or next to the exe, so the bot token can
+   neither be committed nor shared with the exe.
+2. In Telegram, message **@BotFather** → `/newbot` → paste the token into
+   `telegram_bot_token`. Set `wearer_name`.
+3. From each phone, send any message to the new bot — or add the bot to a
+   family group and post there.
+4. For the voice call: each person sends `/start` to **@CallMeBot_txtbot**,
+   then add their `@username` to `callmebot_users`.
+5. **Send test to phones.** It fills in the chat ids by itself, then sends a
+   test message and call. The result shows under the button and in the Log.
+
+Limits — say these out loud to whoever relies on it:
+
+- Sent **from the laptop**. Laptop asleep, offline, or FD Studio closed means
+  nothing is sent. The alert screen says "alert NOT sent" when a send fails.
+- Both services are free. The Telegram Bot API is official; CallMeBot is a
+  third-party service for personal use with no guarantee, and on iPhone the
+  call rings but its audio may not play (their documented Telegram bug).
+- "Reached" means the service accepted it — not that anyone read or answered.
 
 ---
 

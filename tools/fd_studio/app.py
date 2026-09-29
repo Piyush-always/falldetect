@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -34,9 +35,10 @@ from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
 from .log_view import LogTab
+from .notify import Notifier, ensure_config_file
 from .ota_view import OtaTab
 from .replay import replay_corpus, summarize
-from .user_view import UserTab
+from .user_view import CANCEL_WINDOW_S, UserTab
 from .widgets import (AxisBars, BubbleLevel, CascadeStepper, OrientationView,
                       StatePlate, TracePlot)
 
@@ -123,6 +125,12 @@ class MainWindow(QMainWindow):
         self._notice = ""
         self._scanning = False
         self.alarm = Alarm()
+        self.notifier = Notifier()
+        # Tag of the phone alert for the alert on screen now, so a result
+        # arriving after that alert was dismissed updates nothing on screen.
+        self._alert_tag: str | None = None
+        self._phone_note = ("", 0.0)       # (text, show until)
+        self._phone_summary_t = 0.0
         # Guided calibration: ticks remaining in the hold, or 0.
         self._cal_hold = 0
         self._cal_deadline = 0
@@ -151,6 +159,10 @@ class MainWindow(QMainWindow):
                                 self._user_alarm,
                                 self.toggle_user_recording)
         self.user_tab._is_sounding = lambda: self.alarm.sounding
+        self.user_tab.on_escalate = self._escalate
+        self.user_tab.on_stand_down = self._stand_down
+        self.user_tab.on_phone_settings = self._phone_settings
+        self.user_tab.on_phone_test = self._phone_test
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -510,6 +522,90 @@ class MainWindow(QMainWindow):
             self.say("TEST alarm started — press I'm OK to stand it down")
         else:
             self.alarm.stop()
+
+    # ── phone alerts ─────────────────────────────────────────────────────────
+    def _escalate(self, source: str, started: float) -> None:
+        """The cancel window ran out (or SOS): tell the family's phones."""
+        cfg, _ = self.notifier.config()
+        at = time.strftime("%H:%M", time.localtime(started))
+        if source == "sos":
+            text = (f"🆘 {cfg.name} pressed the emergency button at {at}. "
+                    f"Go and check on them now.")
+            call = (f"Emergency. {cfg.name} pressed the emergency button. "
+                    f"Please check on them now.")
+        else:
+            text = (f"⚠️ POSSIBLE FALL: {cfg.name}\nA possible fall at {at} "
+                    f"got no response for {CANCEL_WINDOW_S} seconds. "
+                    f"Go and check on them now.")
+            call = (f"Emergency. A possible fall was detected for {cfg.name}, "
+                    f"with no response for {CANCEL_WINDOW_S} seconds. "
+                    f"Please check on them now.")
+        tag = f"{source}-{int(started)}"
+        self._alert_tag = tag
+        if self.notifier.send(tag, text, call_text=call):
+            self.user_tab.phone_state = "sending"
+            self.say(f"phone alert [{tag}]: sending")
+        else:
+            self.user_tab.phone_state = "off"
+            self.say(f"phone alert [{tag}] NOT sent — phone alerts are not "
+                     f"set up (User tab → Phone alert settings)")
+
+    def _stand_down(self, escalated: bool, by: str, started: float) -> None:
+        """An alert was dismissed. Phones hear about it only if they heard
+        about the alert - plus a silent note for a device-button cancel, so
+        a knock that silenced a real fall still leaves a trace."""
+        self._alert_tag = None
+        cfg, _ = self.notifier.config()
+        at = time.strftime("%H:%M", time.localtime(started))
+        now = time.strftime("%H:%M")
+        where = "on the device" if by == "device" else "on the laptop"
+        if escalated:
+            self.notifier.send("dismissed", f"✅ {cfg.name}: the alert from "
+                               f"{at} was dismissed {where} at {now}.")
+        elif by == "device":
+            self.notifier.send("cancelled", f"ℹ️ {cfg.name}: a possible fall "
+                               f"at {at} was cancelled {where} within "
+                               f"{CANCEL_WINDOW_S} s.", silent=True)
+
+    def _phone_settings(self) -> None:
+        path = ensure_config_file()
+        self.say(f"phone alert settings: {path}")
+        try:
+            # Notepad, not the .json file association, which is often an
+            # IDE or nothing at all on a family laptop.
+            subprocess.Popen(["notepad.exe", str(path)])  # noqa: S603,S607
+        except OSError as exc:
+            self.say(f"could not open the settings file: {exc}")
+        self._phone_summary_t = 0.0
+
+    def _phone_test(self) -> None:
+        self.say("phone alerts: sending a test...")
+        self._phone_note = ("Test: sending...", time.time() + 60)
+        self.notifier.send_test()
+
+    def _on_phone_result(self, item) -> None:
+        if item[0] == "log":
+            self.say(item[1])
+            return
+        _, tag, ok, failures = item
+        when = time.strftime("%H:%M")
+        total = ok + len(failures)
+        # Short on screen (the status panel fits ~3 lines); the full reasons
+        # are in the log lines the worker already sent.
+        if failures and not ok:
+            summary = "Could NOT reach any phone (see Log)."
+        elif failures:
+            summary = f"Reached {ok} of {total} at {when}; {len(failures)} failed (see Log)."
+        else:
+            summary = f"Reached {ok} of {total} at {when}."
+        self.say(f"phone alert [{tag}]: {summary} "
+                 + "; ".join(failures))
+        if tag == self._alert_tag:
+            self.user_tab.phone_state = "sent" if ok else "failed"
+            self.user_tab.phone_detail = summary
+        if tag == "test":
+            self._phone_note = ("Test: " + summary, time.time() + 60)
+            self._phone_summary_t = 0.0
 
     def _set_firmware_version(self, ver: str) -> None:
         self.user_tab.firmware_version = ver
@@ -936,6 +1032,19 @@ class MainWindow(QMainWindow):
                 self.say(f"internal error in refresh: {exc!r}")
 
     def _tick_inner(self) -> None:
+        try:
+            while True:
+                self._on_phone_result(self.notifier.results.get_nowait())
+        except queue.Empty:
+            pass
+        now = time.time()
+        # Re-read the settings file every 2 s, not 30 times a second, so an
+        # edit in Notepad shows up without a restart.
+        if now - self._phone_summary_t > 2.0:
+            self._phone_summary_t = now
+            note, until = self._phone_note
+            self.user_tab.phone_summary = (self.notifier.describe()
+                                           + (f"\n{note}" if now < until else ""))
         self.user_tab.tick()
 
         # Bind the link ONCE. _on_event can set self.link to None (an error tears
