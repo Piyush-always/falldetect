@@ -73,7 +73,16 @@ $D,<seq>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>          sample, 208 Hz
 $P,<seq>,<steps>                                 pedometer, 1 Hz
 $X,<message>                                     device error
 $A,<ax>,<ay>,<az>,<gx>,<gy>,<gz>                 root firmware only, 10 Hz
+$B,<seq>,<count>    button tap, no alert on -> recording toggle   (datalog)
+$C,<seq>            button tap during an alert -> wearer cancel   (datalog)
+$H,<seq>            long press, any time -> SOS, repeated every 2 s
+                    until the host answers 'H'                    (datalog 0.10.0+)
 ```
+
+Host → device, single bytes on NUS RX: `A` cancel window open (slow red, a
+tap cancels), `F` alarm (fast red), `C` clear, `H` SOS received. FD Studio
+re-sends its current A/F/C state every 5 s; the device ignores `A`/`C` while
+an SOS is unacknowledged, so a routine "clear" can never erase one.
 
 **Units: accel milli-g, gyro deci-dps.** Integer only, no floating point in the
 sample path. The same format goes out over USB CDC and BLE/NUS, so all host

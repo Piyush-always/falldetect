@@ -106,6 +106,11 @@ class LinkBase:
     def shutdown(self) -> None:
         self._stop.set()
 
+    def send_command(self, cmd: bytes) -> bool:
+        """Host -> device alert command ('A'/'F'/'C'/'H'). Only the BLE
+        transport can send; datalog does not read its USB CDC input."""
+        return False
+
     # ── parsing ──────────────────────────────────────────────────────────────
     def feed_bytes(self, data: bytes) -> None:
         """Accumulate transport bytes and dispatch each complete line.
@@ -150,8 +155,12 @@ class LinkBase:
                 self.battery_mv = int(p[2])
                 self.charging = p[3] == "1"
             elif p[0] == "$C" and len(p) == 2:
-                # Wearer long-pressed to stand the alarm down.
+                # Wearer tapped the button during an alert to stand it down.
                 self.events.put(("cancel", int(p[1])))
+            elif p[0] == "$H" and len(p) == 2:
+                # Long press: SOS. The device repeats it every 2 s until
+                # acknowledged with 'H', so duplicates are expected.
+                self.events.put(("sos", int(p[1])))
             elif p[0] == "$B" and len(p) == 3:
                 # Cancel button. Surfaced as an event so the alert flow can
                 # consume it later without polling.

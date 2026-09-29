@@ -9,9 +9,12 @@
  * Wire format, one line per sample:
  *     $D,<seq>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>
  *     $P,<seq>,<steps>          hardware step counter, 1 Hz
- *     $B,<seq>,<count>          short press - recording toggle
- *     $C,<seq>                  long press - alarm cancelled by wearer
- * Host -> device (NUS RX): 'A' pre-alert, 'F' alarm, 'C' clear
+ *     $B,<seq>,<count>          short press, no alert - recording toggle
+ *     $C,<seq>                  short press during an alert - wearer cancel
+ *     $H,<seq>                  long press, any time - SOS; repeated every
+ *                               2 s until the host acknowledges with 'H'
+ * Host -> device (NUS RX): 'A' pre-alert, 'F' alarm, 'C' clear,
+ *                          'H' SOS received
  *     $V,<pct>,<mv>,<charging>  battery, 1 Hz (mv is raw - see overlay)
  *     $S,<subscribed>,<usb_drops>,<ble_drops>   status, 1 Hz
  *     $I,<odr>,<accel_fs_g>,<gyro_fs_dps>   identity, on connect
@@ -129,13 +132,18 @@ static uint32_t ble_dropped;
  * edge interrupt does not carry. Polling gets it for free and removes the ISR
  * and its debounce entirely.
  *
- * LONG press stands an alarm down. Chosen over a double-tap because it needs
- * no timing precision - the wearer just holds it - and the person using this
- * may be shaken. It is still deliberate, so knocking the device against
- * furniture cannot silence a real alarm.
+ * During an alert a TAP stands it down; a LONG press, at any time, is SOS.
+ * Changed at the user's request (2026-09-29) from "long press cancels". The
+ * knock risk that motivated the old choice is small here: the host only
+ * alerts after 3 s of post-impact stillness, so the impact itself is over
+ * before a tap can cancel anything - and the host logs every device cancel
+ * to the family's Telegram, so a knock that silenced a real fall is visible.
  */
 #define BUTTON_LONG_TICKS  15   /* 1.5 s at TICK_MS */
 #define BUTTON_WHITE_MS    3000
+/* $H is re-sent at this period until the host answers 'H'. A BLE line can be
+ * dropped (ring buffer full, not yet subscribed) and a lost SOS is silent. */
+#define SOS_RESEND_TICKS   20   /* 2 s at TICK_MS */
 
 /*
  * Alert indication. The LED is NOT the wearer's alarm - a pendant sits on the
@@ -204,6 +212,14 @@ static uint32_t button_count;
  * is exactly the failure this device exists to avoid.
  */
 static atomic_t alert_state = ATOMIC_INIT(ALERT_IDLE);
+
+/*
+ * 1 from the SOS long press until the host answers 'H'. Written by the sample
+ * loop and the NUS RX callback (Bluetooth host context), hence atomic. While
+ * set, the host's routine 'A'/'C' state sync is ignored: the host has not
+ * seen the SOS yet, and a periodic "clear" must not erase it.
+ */
+static atomic_t sos_pending = ATOMIC_INIT(0);
 
 /* --- UART TX -------------------------------------------------------------- */
 
@@ -386,6 +402,10 @@ K_THREAD_DEFINE(ble_tx_tid, BLE_TX_STACK, ble_tx_thread, NULL, NULL, NULL,
  *   'A'  pre-alert  - a fall is suspected, the cancel window is open
  *   'F'  alarm      - the window expired, this is now a real alert
  *   'C'  clear      - stand down, back to normal
+ *   'H'  SOS seen   - the host has the $H; stop re-sending it
+ *
+ * The host re-sends its current state every few seconds, so 'A' and 'C' are
+ * ignored while an SOS is unacknowledged - see sos_pending.
  *
  * Deliberately one byte: this path exists so the HOST can drive the
  * indication, not as a general command channel. Anything richer belongs in a
@@ -402,13 +422,20 @@ static void nus_received(struct bt_conn *conn, const uint8_t *const data,
 	for (uint16_t i = 0; i < len; i++) {
 		switch (data[i]) {
 		case 'A':
-			atomic_set(&alert_state, ALERT_PRE);
+			if (atomic_get(&sos_pending) == 0) {
+				atomic_set(&alert_state, ALERT_PRE);
+			}
 			break;
 		case 'F':
 			atomic_set(&alert_state, ALERT_ALARM);
 			break;
 		case 'C':
-			atomic_set(&alert_state, ALERT_IDLE);
+			if (atomic_get(&sos_pending) == 0) {
+				atomic_set(&alert_state, ALERT_IDLE);
+			}
+			break;
+		case 'H':
+			atomic_set(&sos_pending, 0);
 			break;
 		default:
 			/* Unknown byte: ignored rather than guessed at. */
@@ -874,6 +901,7 @@ int main(void)
 	uint32_t tick = 0U;
 	uint32_t white_ticks = 0U;
 	uint32_t held_ticks = 0U;
+	uint32_t sos_ticks = 0U;
 
 	/*
 	 * 100 ms rather than 500 ms: this loop is the ONLY writer of the LEDs,
@@ -896,13 +924,29 @@ int main(void)
 
 			if (down) {
 				held_ticks++;
-				/* Acknowledge the moment the long press is
-				 * reached rather than on release - holding a
-				 * button with no feedback feels broken, and a
-				 * frightened person will let go early.
+				/* SOS the moment the long press is reached
+				 * rather than on release - holding a button
+				 * with no feedback feels broken, and a
+				 * frightened person will let go early. Fast
+				 * red locally, so the wearer sees it even with
+				 * no host. sos_pending is set FIRST: a host
+				 * 'C' landing in between is then ignored
+				 * instead of erasing the SOS.
 				 */
-				if (held_ticks == BUTTON_LONG_TICKS &&
+				if (held_ticks == BUTTON_LONG_TICKS) {
+					atomic_set(&sos_pending, 1);
+					atomic_set(&alert_state, ALERT_ALARM);
+					sos_ticks = 0U;
+				}
+			} else if (held_ticks > 0U) {
+				/* Released. A short press during an alert
+				 * (including an unacknowledged SOS) stands it
+				 * down; with no alert it is the recording
+				 * toggle, as before.
+				 */
+				if (held_ticks < BUTTON_LONG_TICKS &&
 				    alert != ALERT_IDLE) {
+					atomic_set(&sos_pending, 0);
 					atomic_set(&alert_state, ALERT_IDLE);
 					white_ticks = BUTTON_WHITE_MS / TICK_MS;
 					n = snprintk(line, sizeof(line),
@@ -911,14 +955,7 @@ int main(void)
 						tx_line(line, (size_t)n);
 						ble_tx_line(line, (size_t)n);
 					}
-				}
-			} else if (held_ticks > 0U) {
-				/* Released. A short press is the recording
-				 * toggle; during an alert it does nothing, so
-				 * a knock cannot stand a real alarm down.
-				 */
-				if (held_ticks < BUTTON_LONG_TICKS &&
-				    alert == ALERT_IDLE) {
+				} else if (held_ticks < BUTTON_LONG_TICKS) {
 					white_ticks = BUTTON_WHITE_MS / TICK_MS;
 					button_count++;
 					n = snprintk(line, sizeof(line),
@@ -929,6 +966,22 @@ int main(void)
 					}
 				}
 				held_ticks = 0U;
+			}
+
+			/* SOS: first send on the tick the long press is
+			 * reached, then every SOS_RESEND_TICKS until the host
+			 * answers 'H' (or the wearer taps it away).
+			 */
+			if (atomic_get(&sos_pending) != 0) {
+				if ((sos_ticks % SOS_RESEND_TICKS) == 0U) {
+					n = snprintk(line, sizeof(line),
+						     "$H,%u\n", seq);
+					if (n > 0) {
+						tx_line(line, (size_t)n);
+						ble_tx_line(line, (size_t)n);
+					}
+				}
+				sos_ticks++;
 			}
 		}
 

@@ -131,6 +131,9 @@ class MainWindow(QMainWindow):
         self._alert_tag: str | None = None
         self._phone_note = ("", 0.0)       # (text, show until)
         self._phone_summary_t = 0.0
+        # Last alert command written to the device, (id(link), cmd), and when.
+        self._dev_alert_key = None
+        self._dev_alert_t = 0.0
         # Guided calibration: ticks remaining in the hold, or 0.
         self._cal_hold = 0
         self._cal_deadline = 0
@@ -566,6 +569,21 @@ class MainWindow(QMainWindow):
             self.notifier.send("cancelled", f"ℹ️ {cfg.name}: a possible fall "
                                f"at {at} was cancelled {where} within "
                                f"{CANCEL_WINDOW_S} s.", silent=True)
+
+    def _sync_device_alert(self, link) -> None:
+        """Keep the device's LED and button mode in step with the screen.
+
+        'A' makes a tap on the device mean "I'm OK" and shows slow red; 'F'
+        fast red; 'C' back to normal. Re-sent every 5 s as well as on
+        change: a lost write - or a lost $C from the device - must not
+        leave the device and the screen disagreeing for long.
+        """
+        want = self.user_tab.device_alert_mode()
+        now = time.time()
+        key = (id(link), want)
+        if key != self._dev_alert_key or now - self._dev_alert_t > 5.0:
+            if link.send_command(want):
+                self._dev_alert_key, self._dev_alert_t = key, now
 
     def _phone_settings(self) -> None:
         path = ensure_config_file()
@@ -1066,6 +1084,7 @@ class MainWindow(QMainWindow):
                     self._on_event(kind, payload)
             except queue.Empty:
                 pass
+            self._sync_device_alert(link)
 
         # Connection state from what the link is DOING, not from what a
         # button label says.
@@ -1198,8 +1217,27 @@ class MainWindow(QMainWindow):
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
         elif kind == "cancel":
-            self.alarm.stop()
-            self.say("wearer cancelled the alarm (long press)")
+            # Tap on the device during an alert (firmware 0.10.0+).
+            self.say("wearer cancelled the alert on the device (tap)")
+            if self.user_tab._alert_active():
+                self.user_tab._cancel_alert("device")
+            else:
+                self.alarm.stop()
+        elif kind == "sos":
+            # Acknowledge EVERY copy: the device re-sends $H every 2 s until
+            # it hears 'H', so a lost acknowledgement just means another $H.
+            if self.link is not None:
+                self.link.send_command(b"H")
+            if self.user_tab.raise_sos():
+                self.say("SOS — the wearer long-pressed the device button")
+                self.alarm.start()
+                self._escalate("sos", self.user_tab._fall_started)
+        elif kind == "button" and self.user_tab._alert_active():
+            # Firmware before 0.10.0, or a lost 'A': the device did not know
+            # an alert was on and sent a recording toggle. The wearer meant
+            # stop, and starting a recording mid-alert helps nobody.
+            self.say("device button tapped during an alert — cancelling")
+            self.user_tab._cancel_alert("device")
         elif kind == "button":
             self.say("device button pressed (short) — toggling recording")
             # The device button toggles recording. This exists because you

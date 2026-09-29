@@ -323,6 +323,9 @@ class UserTab(QWidget):
         self.phone_detail = ""
         self.phone_summary = ""
         self._escalated = False
+        # Long press on the device button. Escalates at once - no cancel
+        # window, the wearer asked for help themselves.
+        self._sos = False
         self._activity: list[float] = []
         self._last_activity_push = 0.0
 
@@ -494,6 +497,22 @@ class UserTab(QWidget):
         tag = " (test)" if self._test_fall else ""
         remaining = CANCEL_WINDOW_S - (now - self._fall_started)
 
+        if self._sos:
+            at = time.strftime("%H:%M", time.localtime(self._fall_started))
+            sub = {
+                "sent": f"Pressed at {at}. {self.phone_detail} Someone should "
+                        f"still check on them in person.",
+                "sending": f"Pressed at {at}. Sending to phones now...",
+                "failed": f"Pressed at {at}. Alert NOT sent. "
+                          f"{self.phone_detail} Go and check on them now.",
+            }.get(self.phone_state,
+                  f"Pressed at {at}. Phone alerts are not set up, so nobody "
+                  f"was contacted. Go and check on them now.")
+            self.status.set_state("Emergency button pressed", sub, "danger", True)
+            self.countdown.setVisible(True)
+            self.countdown.set_expired(True)
+            return
+
         if remaining <= 0:
             # Say exactly what was done, never more. "Help is being called"
             # while nothing was sent told a family member they did not need
@@ -549,6 +568,30 @@ class UserTab(QWidget):
         return (self._test_fall or self._fall_started is not None
                 or (self._is_sounding is not None and self._is_sounding()))
 
+    def raise_sos(self) -> bool:
+        """The wearer long-pressed the device button.
+
+        True for a NEW SOS. The device repeats $H every 2 s until the host
+        acknowledges, so repeats are expected and must not re-alert anyone.
+        """
+        if self._sos:
+            return False
+        self._sos = True
+        self._test_fall = False
+        self._fall_started = time.time()
+        self._escalated = True          # the caller alerts the phones now
+        self.phone_state, self.phone_detail = "", ""
+        return True
+
+    def device_alert_mode(self) -> bytes:
+        """What the device should show: b"C" nothing, b"A" cancel window
+        open (slow red), b"F" alarm (fast red)."""
+        if self._fall_started is None:
+            return b"C"
+        if self._sos or time.time() - self._fall_started >= CANCEL_WINDOW_S:
+            return b"F"
+        return b"A"
+
     def _cancel_alert(self, by: str = "screen") -> None:
         """Stand the alert down. `by` is who did it: "screen" or "device"."""
         started, escalated, test = (self._fall_started, self._escalated,
@@ -556,6 +599,7 @@ class UserTab(QWidget):
         self._fall_started = None
         self._test_fall = False
         self._escalated = False
+        self._sos = False
         self.phone_state, self.phone_detail = "", ""
         if self._on_alarm is not None:
             self._on_alarm(False)
