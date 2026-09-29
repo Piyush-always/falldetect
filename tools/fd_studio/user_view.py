@@ -136,7 +136,7 @@ class BigStatus(QWidget):
 class CancelCountdown(QWidget):
     """The 30 s cancel ring plus the button that stands the alert down."""
 
-    def __init__(self, on_cancel, parent=None):
+    def __init__(self, on_cancel, on_silence=None, parent=None):
         super().__init__(parent)
         self._remaining = CANCEL_WINDOW_S
         self._total = CANCEL_WINDOW_S
@@ -150,24 +150,39 @@ class CancelCountdown(QWidget):
         self._ring.setFixedHeight(120)
         lay.addWidget(self._ring)
 
+        row = QHBoxLayout()
+        row.setSpacing(T.S2)
+        # Silence stops the SOUND only: the alert stays on screen and the
+        # family is not told "all clear". For when someone is already on
+        # their way and the siren is just noise.
+        self.btn_silence = QPushButton("Silence alarm")
+        self.btn_silence.setMinimumHeight(48)
+        self.btn_silence.setVisible(False)
+        if on_silence is not None:
+            self.btn_silence.clicked.connect(on_silence)
+        row.addWidget(self.btn_silence)
+
         self.btn = QPushButton("I'm OK")
         self.btn.setObjectName("Danger")
         self.btn.setMinimumHeight(48)
         self.btn.clicked.connect(on_cancel)
-        lay.addWidget(self.btn)
+        row.addWidget(self.btn, 1)
+        lay.addLayout(row)
 
     def set_remaining(self, seconds: float) -> None:
         self._ring.set_fraction(max(0.0, seconds) / self._total)
         self._ring.set_label(str(int(math.ceil(max(0.0, seconds)))))
 
-    def set_expired(self, expired: bool) -> None:
+    def set_expired(self, expired: bool, can_silence: bool = False) -> None:
         """After the window: no ring to count, but the button must stay.
 
         Hiding the whole widget at expiry left an alert nobody could
         acknowledge - the only way out was starting a new test alarm.
+        can_silence: the siren is sounding, so offer to stop just the sound.
         """
         self._ring.setVisible(not expired)
         self.btn.setText("They're OK — dismiss" if expired else "I'm OK")
+        self.btn_silence.setVisible(expired and can_silence)
 
 
 class _Ring(QWidget):
@@ -354,7 +369,10 @@ class UserTab(QWidget):
         self.status = BigStatus()
         lay.addWidget(self.status)
 
-        self.countdown = CancelCountdown(lambda: self._cancel_alert("screen"))
+        self.on_silence = None
+        self.countdown = CancelCountdown(
+            lambda: self._cancel_alert("screen"),
+            lambda: self.on_silence and self.on_silence())
         lay.addWidget(self.countdown)
 
         lay.addWidget(self._caption("MOVEMENT TODAY"))
@@ -543,7 +561,7 @@ class UserTab(QWidget):
                   f"was contacted. Go and check on them now.")
             self.status.set_state("Emergency button pressed", sub, "danger", True)
             self.countdown.setVisible(True)
-            self.countdown.set_expired(True)
+            self.countdown.set_expired(True, self._sounding())
             return
 
         if remaining <= 0:
@@ -570,7 +588,7 @@ class UserTab(QWidget):
                               "person.")
             self.status.set_state(title, sub, "danger", True)
             self.countdown.setVisible(True)
-            self.countdown.set_expired(True)
+            self.countdown.set_expired(True, self._sounding())
             return
 
         self.status.set_state("Possible fall" + tag,
@@ -614,6 +632,9 @@ class UserTab(QWidget):
         self.btn_sos.setText("SOS sent — release")
         if self.on_sos is not None:
             self.on_sos()
+
+    def _sounding(self) -> bool:
+        return self._is_sounding is not None and self._is_sounding()
 
     def raise_sos(self) -> bool:
         """The wearer long-pressed the device button.
@@ -678,8 +699,16 @@ class UserTab(QWidget):
 
         # Recording strip. Shown only while recording, so it reads as a state
         # rather than as decoration.
-        self.btn_test.setText("Stop alarm" if self._alert_active()
-                              else "Test alarm")
+        # Says what pressing it does. On a real alert it DISMISSES (and tells
+        # the family "all clear"), which is not the same as silencing.
+        if self._test_fall:
+            self.btn_test.setText("Stop test")
+        elif self._fall_started is not None:
+            self.btn_test.setText("Dismiss alert")
+        elif self._sounding():
+            self.btn_test.setText("Stop alarm")
+        else:
+            self.btn_test.setText("Test alarm")
 
         rec = link is not None and getattr(link, "recording", False)
         if rec:

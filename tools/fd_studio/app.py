@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self._alert_tag: str | None = None
         self._phone_note = ("", 0.0)       # (text, show until)
         self._phone_summary_t = 0.0
+        self._siren_err_logged = ""
         # Last alert command written to the device, (id(link), cmd), and when.
         self._dev_alert_key = None
         self._dev_alert_t = 0.0
@@ -167,6 +168,7 @@ class MainWindow(QMainWindow):
         self.user_tab.on_phone_settings = self._phone_settings
         self.user_tab.on_phone_test = self._phone_test
         self.user_tab.on_sos = self._screen_sos
+        self.user_tab.on_silence = self._silence_alarm
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -548,6 +550,9 @@ class MainWindow(QMainWindow):
             call = (f"Emergency. A possible fall was detected for {cfg.name}, "
                     f"with no response for {CANCEL_WINDOW_S} seconds. "
                     f"Please check on them now.")
+        # The siren, whatever happens with the phones: nobody may have been
+        # reached, and someone in the house still needs to hear it.
+        self.alarm.escalate()
         tag = f"{source}-{int(started)}"
         self._alert_tag = tag
         if self.notifier.send(tag, text, call_text=call):
@@ -575,12 +580,18 @@ class MainWindow(QMainWindow):
                                f"at {at} was cancelled {where} within "
                                f"{CANCEL_WINDOW_S} s.", silent=True)
 
+    def _silence_alarm(self) -> None:
+        """Stop the sound only. The alert, the device's red LED and what the
+        family was told all stay as they are until someone dismisses it."""
+        self.alarm.stop()
+        self.say("alarm silenced — the alert stays on until dismissed")
+
     def _screen_sos(self) -> None:
         """Hold for SOS on the User tab: the device long press, from the
         laptop. Works with no device connected."""
         if self.user_tab.raise_sos():
             self.say("SOS — held on the laptop")
-            self.alarm.start()
+            # _escalate starts the siren directly - no beep phase first.
             self._escalate("sos-laptop", self.user_tab._fall_started)
 
     def _sync_device_alert(self, link) -> None:
@@ -1068,6 +1079,11 @@ class MainWindow(QMainWindow):
                 self._on_phone_result(self.notifier.results.get_nowait())
         except queue.Empty:
             pass
+        if self.alarm.siren_error != self._siren_err_logged:
+            self._siren_err_logged = self.alarm.siren_error
+            if self.alarm.siren_error:
+                self.say(f"siren could not play ({self.alarm.siren_error}) "
+                         f"— using the fast beep instead")
         now = time.time()
         # Re-read the settings file every 2 s, not 30 times a second, so an
         # edit in Notepad shows up without a restart.
@@ -1243,7 +1259,7 @@ class MainWindow(QMainWindow):
                 self.link.send_command(b"H")
             if self.user_tab.raise_sos():
                 self.say("SOS — the wearer long-pressed the device button")
-                self.alarm.start()
+                # _escalate starts the siren directly - no beep phase first.
                 self._escalate("sos", self.user_tab._fall_started)
         elif kind == "button" and self.user_tab._alert_active():
             # Firmware before 0.10.0, or a lost 'A': the device did not know
