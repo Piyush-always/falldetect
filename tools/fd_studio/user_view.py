@@ -23,10 +23,11 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Property, Qt
+from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, QRectF, Property,
+                            Qt, QTimer)
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
 
 from . import tokens as T
 from .engine import Activity, Posture, Stage
@@ -36,6 +37,10 @@ from .engine import Activity, Posture, Stage
 # laptop, so only while it is on and online - the screen says what was
 # actually sent, never more.
 CANCEL_WINDOW_S = 30
+
+# How long the on-screen SOS button must be held. Same as the device's long
+# press (apps/datalog BUTTON_LONG_TICKS), so the two behave alike.
+SOS_HOLD_MS = 1500
 
 
 def _col(name: str) -> QColor:
@@ -395,6 +400,22 @@ class UserTab(QWidget):
         self.btn_test.clicked.connect(self._test_alarm)
         lay.addWidget(self.btn_test)
 
+        # SOS from the laptop: the SAME path as the device's long press, for
+        # someone at the screen - and the way to try phone alerts with no
+        # device. Hold, not click, like the device: this rings phones, and a
+        # stray click must not.
+        self.on_sos = None
+        self.btn_sos = QPushButton("Hold for SOS")
+        self.btn_sos.setObjectName("Danger")
+        self.btn_sos.setMinimumHeight(48)
+        self._sos_hold = QTimer(self)
+        self._sos_hold.setSingleShot(True)
+        self._sos_hold.setInterval(SOS_HOLD_MS)
+        self._sos_hold.timeout.connect(self._sos_held)
+        self.btn_sos.pressed.connect(self._sos_pressed)
+        self.btn_sos.released.connect(self._sos_released)
+        lay.addWidget(self.btn_sos)
+
         # Who gets told when nobody responds. On this tab, because "does
         # anyone get alerted?" is the family's question, not a debug detail.
         self.lbl_phone = QLabel("")
@@ -429,11 +450,23 @@ class UserTab(QWidget):
         foot.addWidget(self.lbl_fw)
         lay.addLayout(foot)
 
-        row = QHBoxLayout()
+        # Scrolls when the window is short. Without it, below ~750 px of
+        # height Qt squeezed the column and drew the movement bar and the
+        # position buttons OVER the status panel - hiding the one element
+        # that must always be readable.
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addStretch(1)
         row.addWidget(centre)
         row.addStretch(1)
-        outer.addLayout(row, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        scroll.setWidget(page)
+        outer.addWidget(scroll, 1)
 
 
     def _update_footer(self, link) -> None:
@@ -567,6 +600,20 @@ class UserTab(QWidget):
     def _alert_active(self) -> bool:
         return (self._test_fall or self._fall_started is not None
                 or (self._is_sounding is not None and self._is_sounding()))
+
+    def _sos_pressed(self) -> None:
+        self.btn_sos.setText("Keep holding…")
+        self._sos_hold.start()
+
+    def _sos_released(self) -> None:
+        # Let go early: nothing happens, exactly like the device.
+        self._sos_hold.stop()
+        self.btn_sos.setText("Hold for SOS")
+
+    def _sos_held(self) -> None:
+        self.btn_sos.setText("SOS sent — release")
+        if self.on_sos is not None:
+            self.on_sos()
 
     def raise_sos(self) -> bool:
         """The wearer long-pressed the device button.

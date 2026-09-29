@@ -166,6 +166,7 @@ class MainWindow(QMainWindow):
         self.user_tab.on_stand_down = self._stand_down
         self.user_tab.on_phone_settings = self._phone_settings
         self.user_tab.on_phone_test = self._phone_test
+        self.user_tab.on_sos = self._screen_sos
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -531,11 +532,15 @@ class MainWindow(QMainWindow):
         """The cancel window ran out (or SOS): tell the family's phones."""
         cfg, _ = self.notifier.config()
         at = time.strftime("%H:%M", time.localtime(started))
-        if source == "sos":
-            text = (f"🆘 {cfg.name} pressed the emergency button at {at}. "
-                    f"Go and check on them now.")
-            call = (f"Emergency. {cfg.name} pressed the emergency button. "
-                    f"Please check on them now.")
+        if source in ("sos", "sos-laptop"):
+            # Neutral wording for the laptop button: whoever pressed it, it
+            # was not necessarily the wearer.
+            where = "in FD Studio on the laptop" if source == "sos-laptop" \
+                else "on the device"
+            text = (f"🆘 SOS for {cfg.name}: the emergency button was pressed "
+                    f"{where} at {at}. Go and check on them now.")
+            call = (f"Emergency. S O S for {cfg.name}. The emergency button "
+                    f"was pressed. Please check on them now.")
         else:
             text = (f"⚠️ POSSIBLE FALL: {cfg.name}\nA possible fall at {at} "
                     f"got no response for {CANCEL_WINDOW_S} seconds. "
@@ -569,6 +574,14 @@ class MainWindow(QMainWindow):
             self.notifier.send("cancelled", f"ℹ️ {cfg.name}: a possible fall "
                                f"at {at} was cancelled {where} within "
                                f"{CANCEL_WINDOW_S} s.", silent=True)
+
+    def _screen_sos(self) -> None:
+        """Hold for SOS on the User tab: the device long press, from the
+        laptop. Works with no device connected."""
+        if self.user_tab.raise_sos():
+            self.say("SOS — held on the laptop")
+            self.alarm.start()
+            self._escalate("sos-laptop", self.user_tab._fall_started)
 
     def _sync_device_alert(self, link) -> None:
         """Keep the device's LED and button mode in step with the screen.
