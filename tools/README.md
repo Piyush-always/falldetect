@@ -79,17 +79,20 @@ FD Studio picks up /start and /stop only while it is running, and every new
 subscriber is announced (silently) to the others — bots are searchable, so a
 stranger subscribing is visible rather than hidden.
 
-**Shipping the exe with a bot** — put the token and topic in
-`alerts.bundle.json` at the repo root (git-ignored), then build:
+**Shipping the exe with a bot** — there is ONE `FD Studio.exe`, in the repo
+root, tracked in git. It contains **no** token (the repo is public).
+`.\tools\build_exe.ps1` rebuilds it. The token and topic live in
+`alerts.bundle.json` at the repo root (git-ignored):
 
 ```json
 { "telegram_bot_token": "123:ABC...", "ntfy_topic": "fd-sos-<long random>",
   "wearer_name": "Grandma" }
 ```
 
-`.\tools\build_exe.ps1` bundles it and writes `release\FD Studio.exe`
-(git-ignored). On its first run that exe sets up phone alerts by itself.
-**That exe contains the token — share it privately, never commit it.**
+To ship: put `FD Studio.exe` **and** `alerts.bundle.json` in one folder and
+send both. On first run the exe sets up phone alerts from that file by
+itself. **Send the json privately and never commit it** — whoever has it can
+use the bot and read the alert topic.
 Settings live in `%USERPROFILE%\.fd_studio\alerts.json` on the machine
 running it, and the people who pressed Start in `subscribers.json` next to it
 (copy both when moving to another laptop) — not in

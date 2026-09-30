@@ -46,10 +46,12 @@ SECRETS
 The bot token and the ntfy topic live in %USERPROFILE%\\.fd_studio\\
 alerts.json, and the people who pressed Start in subscribers.json next to it
 (copy BOTH when moving to another laptop) - outside the repo, so they cannot
-be committed (and not in AppData: see CONFIG_PATH). A shipped exe can carry them
-(tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored); on
-first run it seeds the settings file from that. Such an exe contains the
-secrets: share it privately, never commit or publish it.
+be committed (and not in AppData: see CONFIG_PATH).
+
+Shipping: the exe itself carries NO token - it is committed to the public
+repo. Send it together with alerts.bundle.json (token + topic, git-ignored)
+in the same folder; on first run the exe seeds its settings from that file.
+Send that file privately: whoever has it can use the bot and read the topic.
 """
 
 from __future__ import annotations
@@ -79,7 +81,8 @@ from pathlib import Path
 CONFIG_PATH = Path(os.environ.get("FD_STUDIO_ALERTS_FILE") or
                    (Path.home() / ".fd_studio" / "alerts.json"))
 
-#: Name of the settings file build_exe.ps1 bundles into a shipped exe.
+#: Settings file shipped NEXT TO the exe (never inside it: the exe is in the
+#: public repo). Git-ignored.
 BUNDLE_NAME = "alerts.bundle.json"
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
@@ -299,12 +302,16 @@ def migrate_subscribers(path: Path = CONFIG_PATH) -> int:
 
 
 def _bundled_defaults() -> dict:
-    """Settings baked into a shipped exe, or {}."""
-    base = getattr(sys, "_MEIPASS", None)
-    if not getattr(sys, "frozen", False) or not base:
+    """alerts.bundle.json from beside a shipped exe, or {}.
+
+    Only for the exe: a source run must never pick up the repo's copy (tests
+    and a developer's settings would start polling the real bot).
+    """
+    if not getattr(sys, "frozen", False):
         return {}
     try:
-        raw = json.loads((Path(base) / BUNDLE_NAME).read_text(encoding="utf-8"))
+        raw = json.loads((Path(sys.executable).parent / BUNDLE_NAME)
+                         .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return raw if isinstance(raw, dict) else {}
