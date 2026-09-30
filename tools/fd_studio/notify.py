@@ -373,7 +373,7 @@ class Notifier:
                 failures.append(f"{who}: {err}")
                 self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
                 if who.startswith("call ") and err.startswith("CallMeBot refused"):
-                    self._tell_call_blocked(cfg, who[5:])
+                    self._tell_call_blocked(cfg, who[5:], err)
         self.results.put(("done", tag, ok, failures))
 
     @staticmethod
@@ -383,18 +383,25 @@ class Notifier:
                 return s["name"] or s["username"] or chat_id
         return chat_id
 
-    def _tell_call_blocked(self, cfg: AlertConfig, username: str) -> None:
+    def _tell_call_blocked(self, cfg: AlertConfig, username: str,
+                           err: str) -> None:
         """A refused call is invisible to the person it was meant for -
-        tell them, on the channel that does reach them."""
+        tell them, on the channel that does reach them, what to do."""
+        m = re.search(r"add (@\w+)", err)
+        if "spam block" in err and m:
+            fix = (f"CallMeBot needs you to add {m.group(1)} to your Telegram "
+                   f"contacts and send it any message (one time). Details: "
+                   f"https://www.callmebot.com/blog/spam-error/")
+        else:
+            fix = (f"CallMeBot is not allowed to call you yet. Open "
+                   f"{CALLMEBOT_BOT} in Telegram and press Start (one time).")
         for s in cfg.subscribers:
             if s.get("username") == username and not s.get("group"):
                 try:
                     self._telegram(cfg, s["chat_id"],
                                    f"📞 FD Studio tried to CALL you about "
-                                   f"{cfg.name}, but CallMeBot is not allowed "
-                                   f"to call you yet. Open {CALLMEBOT_BOT} in "
-                                   f"Telegram and press Start (one time).",
-                                   silent=False)
+                                   f"{cfg.name}, but it did not go through. "
+                                   f"{fix}", silent=False)
                 except RuntimeError:
                     pass
 
@@ -438,9 +445,19 @@ class Notifier:
         # "Authorization for user @x is not received. Warning! User not
         # authorized." Other failure wordings are not known, so the page
         # text goes into the log for a human to read.
-        if "not authorized" in text.lower() or "is not received" in text.lower():
+        low = text.lower()
+        if "not authorized" in low or "is not received" in low:
             raise RuntimeError("CallMeBot refused — this person must first "
                                f"send /start to {CALLMEBOT_BOT} in Telegram")
+        # Seen 2026-09-30: "Someone reported CallMeBot as spammer, please add
+        # @CallMeBot_API16 in your Telegram contacts and send him a message".
+        # Also HTTP 200, and it was being counted as a successful call. The
+        # account number varies per person (CallMeBot's spam-error page).
+        if "as spammer" in low or "spam-error" in low:
+            m = re.search(r"@CallMeBot_API\w*", text, re.IGNORECASE)
+            caller = m.group(0) if m else "the CallMeBot account that calls you"
+            raise RuntimeError(f"CallMeBot refused (spam block) — add {caller} "
+                               f"to Telegram contacts and send it a message")
         return f"CallMeBot: {text[-160:]}" if text else ""
 
     # ── subscriptions: the bot's inbox ───────────────────────────────────────
