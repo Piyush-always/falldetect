@@ -60,7 +60,7 @@ Re-calibrate if you take the device off and put it back on. The cord twists.
 
 Press the **button on the device** to start recording, press again to stop.
 That exists so you do not have to reach the laptop mid-activity — reaching for
-a keyboard while falling onto a mattress puts the reach in the recording, not
+a keyboard while falling onto a crash mat puts the reach in the recording, not
 the fall.
 
 Before each set, set the label in the Debug tab's inspector:
@@ -73,6 +73,30 @@ Before each set, set the label in the Debug tab's inspector:
 
 Files land in `data/neck/<activity>/<timestamp>_<subject>_<activity>.csv`, so
 **the label is the folder**. Nothing extra to track.
+
+### Before any fall recording — safety
+
+Rows 10–13 below are real falls by a real person. Nobody gets hurt producing
+training data. PROJECT_OUTLINE.md §5.5: simulated falls onto crash mats, young
+healthy volunteers, consent — and **never** real falls from older participants.
+
+- **Crash mat, not a bed.** A gym or crash mat at least 20 cm thick, on open
+  floor, at least 1 m clear of furniture, walls and radiators. A bed is high,
+  springy and has a hard frame at the edges.
+- **A second person is present for every fall.** Not the one operating the
+  laptop — someone watching the faller.
+- **Healthy adults only.** No back, neck, joint or bone problems, not pregnant,
+  not on medication that affects balance. Never an older participant.
+- **Practise slowly first.** Each fall type at half speed onto the mat before
+  recording it. Backward falls only after practising a chin tuck (head off the
+  mat); do not put a hand back to catch yourself — that is how wrists break.
+  The slow slump goes down a padded wall onto the mat.
+- **The pendant cord.** Short enough that the device cannot swing into the
+  face, with a breakaway clasp so it cannot choke if it snags.
+- **Stop on any pain or dizziness**, and take breaks: tired people land badly.
+- **Consent.** Each volunteer agrees in writing to what they will do and to
+  how the recordings are used. Keep consent records outside this repo; the
+  data refers to people only by subject id (`s01`).
 
 ### What to record — confounders FIRST
 
@@ -90,10 +114,10 @@ ordinary movement sets it off, so record that first and in volume.
 | 7 | `sitting_down_heavily` | 10 | — | **SisFall's number one false alarm.** Do not skip. |
 | 8 | `bending_picking_up` | 10 | — | Big tilt change, no fall |
 | 9 | `stairs_down` | 5 | — | Also flagged false in SisFall |
-| 10 | `fall_forward` | 10 | — | Onto the bed |
+| 10 | `fall_forward` | 10 | — | Onto the crash mat — see safety above |
 | 11 | `fall_backward` | 10 | — | |
 | 12 | `fall_left` / `fall_right` | 5 each | — | |
-| 13 | `fall_slow_slump` | 10 | — | Slide down a wall. The known weak case. |
+| 13 | `fall_slow_slump` | 10 | — | Slide down a padded wall onto the mat. The known weak case. |
 
 Rows 5–9 are the ones that make or break it. A detector that catches every fall
 and also fires when you sit down is worse than useless — it gets taken off.
