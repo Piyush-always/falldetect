@@ -889,6 +889,18 @@ class UserTab(QWidget):
             return
 
         stats = link.stats()
+        if stats["samples"] == 0 and stats.get("sensor_silent"):
+            # Connected and talking (button presses, battery, status all
+            # arrive) but no motion data at all. "Connecting..." here had
+            # people waiting for something that was never going to come.
+            self.status.set_state("Pendant is not sending motion data",
+                                  "It is connected, but its motion sensor has "
+                                  "not started. Falls cannot be detected. "
+                                  "Switch the pendant off and on, then press "
+                                  "Connect again.", "danger", True)
+            self.countdown.setVisible(False)
+            return
+
         if stats["samples"] == 0:
             self.status.set_state("Connecting...",
                                   "Waiting for the device to start sending.",
