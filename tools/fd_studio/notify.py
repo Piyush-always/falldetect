@@ -43,9 +43,10 @@ Standard library only, so the packaged exe gains no dependency.
 
 SECRETS
 -------
-The bot token, the ntfy topic and the subscriber list live in
-%USERPROFILE%\\.fd_studio\\alerts.json - outside the repo, so they cannot be
-committed (and not in AppData: see CONFIG_PATH). A shipped exe can carry them
+The bot token and the ntfy topic live in %USERPROFILE%\\.fd_studio\\
+alerts.json, and the people who pressed Start in subscribers.json next to it
+(copy BOTH when moving to another laptop) - outside the repo, so they cannot
+be committed (and not in AppData: see CONFIG_PATH). A shipped exe can carry them
 (tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored); on
 first run it seeds the settings file from that. Such an exe contains the
 secrets: share it privately, never commit or publish it.
@@ -145,6 +146,10 @@ class AlertConfig:
     #: [{"chat_id", "name", "username" ("@x" or ""), "group": bool}]
     subscribers: list[dict] = field(default_factory=list)
     telegram_chat_ids: list[str] = field(default_factory=list)
+    #: True when some recipients could not be read (subscribers.json or
+    #: telegram_chat_ids broken): a send then reaches only some of them and
+    #: must not be reported as complete.
+    recipients_incomplete: bool = False
 
     @property
     def name(self) -> str:
@@ -218,29 +223,47 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
         return AlertConfig(), f"cannot read {path.name}: {exc}"
     if not isinstance(raw, dict):
         return AlertConfig(), f"{path.name} is not a JSON object"
+    problems: list[str] = []
+    cfg = AlertConfig()
+
+    def field_(fn, *args):
+        """One field at a time: a bad optional field is skipped and
+        reported, never allowed to block every alert (PR #1 re-check)."""
+        try:
+            return fn(*args), True
+        except _Bad as exc:
+            problems.append(f"{path.name}: {exc}")
+            return None, False
+
+    for key in ("wearer_name", "telegram_bot_token", "ntfy_topic"):
+        value, ok = field_(_as_str, raw.get(key), key)
+        if ok:
+            setattr(cfg, key, value)
+    server, ok = field_(_as_str, raw.get("ntfy_server"), "ntfy_server")
+    if ok and server:
+        cfg.ntfy_server = server.rstrip("/")
+    ids, ok = field_(lambda v: [c for c in (_as_str(x, "telegram_chat_ids")
+                                            for x in _as_list(v, "telegram_chat_ids"))
+                                if c], raw.get("telegram_chat_ids"))
+    if ok:
+        cfg.telegram_chat_ids = ids
+    else:
+        cfg.recipients_incomplete = True
+
     subs, sub_problem = read_subscribers(path)
-    try:
-        # Old files kept subscribers in alerts.json; still honoured until
-        # migrate_subscribers() has moved them.
-        legacy = _clean_subscribers(raw.get("subscribers"))
-        known = {s["chat_id"] for s in subs}
-        subs += [s for s in legacy if s["chat_id"] not in known]
-        cfg = AlertConfig(
-            wearer_name=_as_str(raw.get("wearer_name"), "wearer_name"),
-            telegram_bot_token=_as_str(raw.get("telegram_bot_token"),
-                                       "telegram_bot_token"),
-            ntfy_topic=_as_str(raw.get("ntfy_topic"), "ntfy_topic"),
-            ntfy_server=(_as_str(raw.get("ntfy_server"), "ntfy_server")
-                         .rstrip("/") or NTFY_DEFAULT_SERVER),
-            subscribers=subs,
-            telegram_chat_ids=[c for c in (
-                _as_str(x, "telegram_chat_ids")
-                for x in _as_list(raw.get("telegram_chat_ids"),
-                                  "telegram_chat_ids")) if c],
-        )
-    except _Bad as exc:
-        return AlertConfig(), f"{path.name}: {exc}"
-    return cfg, sub_problem
+    if sub_problem:
+        problems.append(sub_problem)
+        cfg.recipients_incomplete = True
+    if not subscribers_path(path).exists():
+        # Only BEFORE migration: an old alerts.json still holding the list.
+        # Once subscribers.json exists it is the only list - a stale
+        # Notepad buffer that writes the old list back must not bring back
+        # people who sent /stop (PR #1 re-check).
+        legacy, ok = field_(_clean_subscribers, raw.get("subscribers"))
+        if ok:
+            subs = legacy
+    cfg.subscribers = subs
+    return cfg, "; ".join(problems)
 
 
 def _write_json(path: Path, raw) -> None:
@@ -261,16 +284,17 @@ def migrate_subscribers(path: Path = CONFIG_PATH) -> int:
             if isinstance(raw, dict) else []
     except (OSError, ValueError, _Bad):
         return 0
-    if not legacy:
-        return 0
-    subs, problem = read_subscribers(path)
-    if problem:
-        return 0                 # never overwrite a file we cannot read
-    known = {s["chat_id"] for s in subs}
-    _write_json(subscribers_path(path),
-                subs + [s for s in legacy if s["chat_id"] not in known])
-    raw.pop("subscribers", None)
-    _write_json(path, raw)
+    if not legacy or subscribers_path(path).exists():
+        return 0                 # nothing to move, or already moved
+    try:
+        _write_json(subscribers_path(path), legacy)
+    except OSError:
+        return 0                 # load_config keeps honouring the old list
+    try:
+        raw.pop("subscribers", None)
+        _write_json(path, raw)
+    except OSError:
+        pass                     # e.g. read-only: the list is ignored now
     return len(legacy)
 
 
@@ -342,7 +366,10 @@ def _http(url: str, data: dict | None = None,
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read()[:300].decode("utf-8", "replace")
+        try:
+            detail = exc.read()[:300].decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - connection died mid-error-body
+            detail = ""
         try:
             j = json.loads(detail)
             detail = (j.get("description") or j.get("error") or detail) \
@@ -380,9 +407,10 @@ class Notifier:
     """Fire-and-report phone alerts, plus the bot's subscription inbox.
     Safe to call from the GUI thread.
 
-    results carries ("log", text) and ("done", tag, ok, failures) tuples:
-    ok is the number of deliveries the services accepted, failures a list of
-    "who: why" strings. "Accepted" is all that can be known - a message can
+    results carries ("log", text) and ("done", tag, ok, failures,
+    telegram_ok, ntfy_ok, complete) tuples: ok is the number of deliveries
+    the services accepted, failures a list of "who: why" strings, complete
+    False when some recipients could not be read. "Accepted" is all that can be known - a message can
     sit unread, and ntfy cannot say who is subscribed.
     """
 
@@ -466,14 +494,14 @@ class Notifier:
     def _test_job(self) -> None:
         cfg, problem = self.config()
         if problem and not cfg.configured:
-            self.results.put(("done", "test", 0, [problem], 0, 0))
+            self.results.put(("done", "test", 0, [problem], 0, 0, False))
             return
         if not cfg.configured:
             how = (f"send people the link {self.share_link} and ask them to "
                    f"press Start" if self.share_link else
                    "press 'Phone alert settings' and add the bot token")
             self.results.put(("done", "test", 0,
-                              [f"nobody to alert yet — {how}"], 0, 0))
+                              [f"nobody to alert yet — {how}"], 0, 0, False))
             return
         # Urgent on purpose: a test has to prove the LOUD alarm works.
         self._send_all(cfg, "test", "🧪 Test from FD Studio",
@@ -497,11 +525,16 @@ class Notifier:
                              lambda c=chat: self._telegram(
                                  cfg, c, f"{title}\n{body}", silent)))
 
-        # ("done", tag, ok, failures, telegram_ok, ntfy_ok). Counted per
-        # channel because only Telegram can confirm a person: ntfy accepts a
-        # post whether or not any phone is subscribed (PR #1 review).
+        # ("done", tag, ok, failures, telegram_ok, ntfy_ok, complete).
+        # Counted per channel because only Telegram can confirm a person:
+        # ntfy accepts a post whether or not any phone is subscribed (PR #1
+        # review). complete is False when some recipients could not even be
+        # read, so a partial send is never shown as "family alerted".
         ok = tg_ok = ntfy_ok = 0
         failures: list[str] = []
+        if cfg.recipients_incomplete:
+            failures.append("some recipients: the subscriber list could not "
+                            "be read (see Log)")
         try:
             for who, job in jobs:
                 err = self._with_retries(job)
@@ -517,7 +550,8 @@ class Notifier:
                     self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
         finally:
             # Always an outcome, or the screen says "Sending..." for ever.
-            self.results.put(("done", tag, ok, failures, tg_ok, ntfy_ok))
+            self.results.put(("done", tag, ok, failures, tg_ok, ntfy_ok,
+                              not cfg.recipients_incomplete))
 
     @staticmethod
     def _who(cfg: AlertConfig, chat_id: str) -> str:
@@ -665,9 +699,11 @@ class Notifier:
             self._http(TELEGRAM_API.format(token=token, method="sendMessage"),
                        {"chat_id": chat_id, "text": text,
                         "disable_notification": "true" if silent else "false"})
-        except RuntimeError as exc:
+        except Exception as exc:  # noqa: BLE001 - after a subscribe write
+            msg = str(exc) if isinstance(exc, RuntimeError) \
+                else type(exc).__name__
             self.results.put(("log", f"phone alerts: could not reply to "
-                                     f"{chat_id}: {exc}"))
+                                     f"{chat_id}: {msg}"))
 
     def _subscribe(self, token: str, chat: dict, explicit: bool) -> None:
         group = chat.get("type") in ("group", "supergroup", "channel")

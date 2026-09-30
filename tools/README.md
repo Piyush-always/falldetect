@@ -90,8 +90,9 @@ stranger subscribing is visible rather than hidden.
 `.\tools\build_exe.ps1` bundles it and writes `release\FD Studio.exe`
 (git-ignored). On its first run that exe sets up phone alerts by itself.
 **That exe contains the token — share it privately, never commit it.**
-Settings, including the subscriber list, live in
-`%USERPROFILE%\.fd_studio\alerts.json` on the machine running it — not in
+Settings live in `%USERPROFILE%\.fd_studio\alerts.json` on the machine
+running it, and the people who pressed Start in `subscribers.json` next to it
+(copy both when moving to another laptop) — not in
 AppData, because the Microsoft Store Python gets a private, redirected copy of
 AppData and would read a different file from the exe.
 

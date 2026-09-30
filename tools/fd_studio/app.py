@@ -139,7 +139,10 @@ class MainWindow(QMainWindow):
                                               "bot token bundled in this exe"))
         # Before anyone can open alerts.json in Notepad: move subscribers
         # kept there by older versions into subscribers.json.
-        moved = migrate_subscribers(self.notifier.config_path)
+        try:
+            moved = migrate_subscribers(self.notifier.config_path)
+        except Exception:  # noqa: BLE001 - never stop FD Studio starting
+            moved = 0
         if moved:
             self.notifier.results.put(("log", f"phone alerts: moved {moved} "
                                               f"subscriber(s) to "
@@ -153,6 +156,12 @@ class MainWindow(QMainWindow):
         self._alert_source = ""
         self._alert_started = 0.0
         self._alert_sent_t = 0.0
+        # Whether this alert's phone message actually went out: only then do
+        # the phones hear "all clear" (PR #1 re-check).
+        self._alert_paged = False
+        # Last moment a recording was running, to tell data collection from
+        # a real fall even when the stop tap came before the detector fired.
+        self._last_recording_t = 0.0
         self._phone_note = ("", 0.0)       # (text, show until)
         self._phone_summary_t = 0.0
         self._siren_err_logged = ""
@@ -559,6 +568,16 @@ class MainWindow(QMainWindow):
             self.alarm.stop()
 
     # ── phone alerts ─────────────────────────────────────────────────────────
+    #: A fall that starts within this long of a recording counts as data
+    #: collection: the detector confirms ~3.5 s after the impact, often after
+    #: the volunteer has already tapped "stop" (PR #1 re-check).
+    RECORDING_GRACE_S = 30.0
+
+    def _during_recording(self, started: float) -> bool:
+        if self.link is not None and self.link.recording:
+            return True
+        return started - self._last_recording_t < self.RECORDING_GRACE_S
+
     def _escalate(self, source: str, started: float) -> None:
         """The cancel window ran out (or SOS): siren, then the phones."""
         # The siren FIRST, before any settings or network work: nobody may be
@@ -567,6 +586,7 @@ class MainWindow(QMainWindow):
         # SOS silent (PR #1 review).
         self.alarm.escalate()
         self._alert_source, self._alert_started = source, started
+        self._alert_paged = False
         self._send_alert(source, started)
 
     def _send_alert(self, source: str, started: float) -> None:
@@ -575,8 +595,7 @@ class MainWindow(QMainWindow):
         tag = f"{source}-{int(started)}-{int(self._alert_sent_t)}"
         self._alert_tag = tag
         try:
-            if (source == "fall" and self.link is not None
-                    and self.link.recording):
+            if source == "fall" and self._during_recording(started):
                 # Data collection: falls here are staged onto a mat, with a
                 # spotter (DATA_COLLECTION.md). Paging the family for each
                 # one is wrong. SOS still goes out: that is always deliberate.
@@ -599,6 +618,7 @@ class MainWindow(QMainWindow):
                 body = (f"No response for {CANCEL_WINDOW_S} seconds after a "
                         f"possible fall at {at}. Go and check on them now.")
             if self.notifier.send(tag, title, body, urgent=True):
+                self._alert_paged = True
                 self.user_tab.phone_state = "sending"
                 self.say(f"phone alert [{tag}]: sending")
             elif problem:
@@ -636,11 +656,16 @@ class MainWindow(QMainWindow):
         at = time.strftime("%H:%M", time.localtime(started))
         now = time.strftime("%H:%M")
         where = "on the device" if by == "device" else "on the laptop"
-        if escalated:
+        paged, self._alert_paged = self._alert_paged, False
+        if escalated and paged:
+            # Whoever was told about the alert hears it is over - including
+            # an SOS during a recording, which does page (PR #1 re-check).
             self.notifier.send("dismissed", f"✅ All clear — {cfg.name}",
                                f"The alert from {at} was dismissed {where} "
                                f"at {now}.")
-        elif by == "device":
+        elif by == "device" and not self._during_recording(started):
+            # Not for data collection: every "stop" tap after a staged fall
+            # would otherwise leave a note on the family's phones.
             self.notifier.send("cancelled", f"ℹ️ Cancelled — {cfg.name}",
                                f"A possible fall at {at} was cancelled "
                                f"{where} within {CANCEL_WINDOW_S} s.",
@@ -709,14 +734,19 @@ class MainWindow(QMainWindow):
         if item[0] == "log":
             self.say(item[1])
             return
-        _, tag, ok, failures, tg_ok, ntfy_ok = item
+        _, tag, ok, failures, tg_ok, ntfy_ok, complete = item
         when = time.strftime("%H:%M")
         # Short on screen (the status panel fits ~3 lines); the full reasons
         # are in the log lines the worker already sent. Only Telegram can
         # confirm that a person was reached: ntfy accepts a post whether or
         # not any phone is subscribed, so it never counts as "family
         # alerted" on its own (PR #1 review).
-        if tg_ok:
+        if tg_ok and not complete:
+            summary = (f"Reached {tg_ok} on Telegram, but the subscriber list "
+                       f"could not be read, so family who subscribed may NOT "
+                       f"have been alerted.")
+            state = "unconfirmed"
+        elif tg_ok:
             summary = (f"Reached {tg_ok} on Telegram at {when}"
                        + ("; loud alarm posted" if ntfy_ok else "")
                        + (f"; {len(failures)} failed (see Log)."
@@ -1206,6 +1236,8 @@ class MainWindow(QMainWindow):
             note, until = self._phone_note
             self.user_tab.phone_summary = (self.notifier.describe()
                                            + (f"\n{note}" if now < until else ""))
+        if self.link is not None and self.link.recording:
+            self._last_recording_t = now
         self.user_tab.tick()
         self._resend_failed_alert()
 
@@ -1332,7 +1364,8 @@ class MainWindow(QMainWindow):
 
         if self.link and stats:
             s = stats
-            if s["stale"] > 3.0 and s["link_stale"] <= 3.0:
+            if s["samples"] > 0 and s["stale"] > 3.0 \
+                    and s["link_stale"] <= 3.0:
                 # Same split as the plate: status still arriving means the
                 # link is fine and the sensor is not (PR #1 review).
                 self.lbl_status.setText(
