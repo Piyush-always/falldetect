@@ -11,20 +11,26 @@ Until it does, the laptop makes the noise. That is honest for a demo (the
 sound is real, the escalation it stands for is real) as long as nobody claims
 the device itself is sounding. Say so out loud when showing it.
 
-TWO PHASES
-----------
-  1. Cancel window (first 30 s): a two-tone beep. Insistent, not frantic -
-     most of these are false alarms the wearer is about to cancel.
-  2. Escalated (window expired, or SOS): a looping siren until someone
-     silences or dismisses it. The situation got worse, so the sound does.
+THE SOUND
+---------
+Modelled on patient-monitor alarms (the IEC 60601-1-8 style - not certified
+to it): short, buzzy, harmonic-rich pulses at one flat pitch. That reads as
+"medical alarm", where a sweeping siren or a two-note ding-dong read as a toy
+(user feedback, 2026-09-30). Two levels:
 
-The siren is a WAV played through the Windows mixer (PlaySound), not
-winsound.Beep: fuller, louder at the same volume setting, and it loops without
-a thread blocking on every tone. The WAV is synthesised on first use into the
-temp folder - no binary in git, nothing extra for PyInstaller to bundle. If
-PlaySound fails for any reason, phase 2 falls back to the fast beep: an alarm
-that goes quiet because a sound file would not play is the failure this
-module exists to prevent.
+  1. Cancel window (first 30 s): 3 pulses, then a pause, repeating.
+     Insistent, not frantic - most of these are false alarms the wearer is
+     about to cancel.
+  2. Escalated (window expired, or SOS - at once): the high-priority burst,
+     3 + 2 + 3 + 2 pulses, higher and louder, repeating until someone
+     silences or dismisses it.
+
+Both are WAVs played through the Windows mixer (PlaySound, looping), not
+winsound.Beep: fuller, and louder at the same volume setting. They are
+synthesised on first use into the temp folder - no binary in git, nothing for
+PyInstaller to bundle. If PlaySound fails, the same rhythm is played with
+winsound.Beep instead: an alarm that goes quiet because a sound file would not
+play is the failure this module exists to prevent.
 
 Windows only, by design: winsound is in the standard library, so this adds no
 dependency, and the project targets Windows. Everywhere else it degrades to
@@ -50,14 +56,8 @@ except ImportError:  # pragma: no cover - non-Windows
     _HAVE_SOUND = False
 
 
-#: Two-tone pattern, repeated. A steady beep reads as an appliance; an
-#: alternating pair reads as an alarm and carries better through a room.
-_PATTERN = ((880, 350), (660, 350))
-
-#: Phase 2 fallback if the siren WAV cannot play: faster and higher.
-_URGENT_PATTERN = ((1100, 180), (880, 180))
 #: Phase 2 starts this long after start() even without escalate(), so a
-#: rehearsal ("Test alarm") also reaches the siren at the end of its window.
+#: rehearsal ("Test alarm") also reaches the escalated sound.
 _URGENT_AFTER_S = 30.0
 
 #: Sounds until stop(). This is only a backstop so a forgotten alarm cannot
@@ -65,56 +65,68 @@ _URGENT_AFTER_S = 30.0
 #: 30 s window ended - the alarm stopped exactly when nobody had responded.
 _MAX_SECONDS = 600.0
 
-# Siren: a "wail" sweeping LOW -> HIGH -> LOW every SWEEP_S. Upper harmonics
-# make it harsher and louder-sounding than a pure sine at the same level,
-# which is the point. 22.05 kHz mono 16-bit: ~350 KB for the 8 s loop.
-SIREN_RATE = 22050
-SIREN_LOW_HZ = 650.0
-SIREN_HIGH_HZ = 1500.0
-SIREN_SWEEP_S = 1.0
-SIREN_SWEEPS = 8
-SIREN_LEVEL = 0.9           # peak, as a fraction of full scale
-SIREN_FADE_S = 0.01         # at the loop seam, so the repeat does not click
-SIREN_FILE = "fd_studio_siren_v1.wav"
+# ── the pulses ───────────────────────────────────────────────────────────────
+RATE = 22050
+PULSE_S = 0.15          # one pulse
+PULSE_GAP_S = 0.075     # between pulses inside a group
+ATTACK_S = 0.015        # ramps: no click, but still a hard edge
+RELEASE_S = 0.03
+#: Relative level of harmonics 1..5. A pure sine is easy to ignore and hard
+#: to locate; the upper harmonics make it buzzy and cut through a room.
+HARMONICS = (1.0, 0.7, 0.5, 0.35, 0.25)
+
+#: (file, fundamental Hz, peak level, pulse groups, gaps after each group).
+#: The last gap is the pause before the pattern repeats.
+MEDIUM = ("fd_studio_alarm_medium_v2.wav", 587.0, 0.7, (3,), (1.6,))
+HIGH = ("fd_studio_alarm_high_v2.wav", 740.0, 0.9, (3, 2, 3, 2),
+        (0.35, 0.7, 0.35, 0.8))
 
 
-def make_siren(path: Path) -> Path:
-    """Write the siren loop to `path` (overwriting) and return it.
+def timeline(groups, gaps) -> list[tuple[bool, float]]:
+    """Pulse groups -> [(is_pulse, seconds), ...], starting on a pulse."""
+    out: list[tuple[bool, float]] = []
+    for n, gap in zip(groups, gaps):
+        for i in range(n):
+            out.append((True, PULSE_S))
+            if i < n - 1:
+                out.append((False, PULSE_GAP_S))
+        out.append((False, gap))
+    return out
 
-    Phase-continuous: frequency is integrated, not set per sample, or every
-    sweep would crackle.
-    """
-    n = int(SIREN_RATE * SIREN_SWEEP_S * SIREN_SWEEPS)
-    fade = int(SIREN_RATE * SIREN_FADE_S)
-    phase = 0.0
-    wav = []
-    for i in range(n):
-        t = (i / SIREN_RATE) % SIREN_SWEEP_S / SIREN_SWEEP_S   # 0..1
-        tri = 2 * t if t < 0.5 else 2 * (1 - t)                  # 0..1..0
-        freq = SIREN_LOW_HZ + (SIREN_HIGH_HZ - SIREN_LOW_HZ) * tri
-        phase += 2 * math.pi * freq / SIREN_RATE
-        s = (math.sin(phase) + 0.35 * math.sin(3 * phase)
-             + 0.15 * math.sin(5 * phase))
-        gain = min(1.0, i / fade, (n - 1 - i) / fade) if fade else 1.0
-        wav.append(gain * s)
-    # Normalise to the real peak: the harmonics never line up, so scaling by
-    # their summed amplitude left the loudest alarm at half volume (measured).
-    scale = 32767 * SIREN_LEVEL / max(abs(v) for v in wav)
-    frames = b"".join(struct.pack("<h", int(v * scale)) for v in wav)
+
+def make_wav(path: Path, level_spec) -> Path:
+    """Write one looping alarm pattern (MEDIUM or HIGH) to `path`."""
+    _name, f0, level, groups, gaps = level_spec
+    attack, release = int(RATE * ATTACK_S), int(RATE * RELEASE_S)
+    wav: list[float] = []
+    for is_pulse, secs in timeline(groups, gaps):
+        n = int(RATE * secs)
+        if not is_pulse:
+            wav.extend([0.0] * n)
+            continue
+        for i in range(n):
+            env = min(1.0, i / attack, (n - 1 - i) / release)
+            t = i / RATE
+            wav.append(env * sum(a * math.sin(2 * math.pi * f0 * (k + 1) * t)
+                                 for k, a in enumerate(HARMONICS)))
+    # Normalise to the real peak - the harmonics never all line up, so
+    # scaling by their summed amplitude comes out far too quiet (measured).
+    scale = 32767 * level / max(abs(v) for v in wav)
     path.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(SIREN_RATE)
-        w.writeframes(bytes(frames))
+        w.setframerate(RATE)
+        w.writeframes(b"".join(struct.pack("<h", int(v * scale)) for v in wav))
     return path
 
 
-def siren_path() -> Path:
-    """The siren WAV, synthesised on first use."""
-    path = Path(tempfile.gettempdir()) / SIREN_FILE
+def wav_path(level_spec) -> Path:
+    """The pattern's WAV, synthesised on first use. The file name carries a
+    version, so changing the sound never plays a stale file."""
+    path = Path(tempfile.gettempdir()) / level_spec[0]
     if not path.exists() or path.stat().st_size < 1000:
-        make_siren(path)
+        make_wav(path, level_spec)
     return path
 
 
@@ -125,7 +137,7 @@ class Alarm:
         self._stop = threading.Event()
         self._urgent = threading.Event()
         self._thread: threading.Thread | None = None
-        #: Why phase 2 is beeping instead of the siren, if it is. For the log.
+        #: Why a phase is using Beep instead of its WAV, if it is. For the log.
         self.siren_error = ""
 
     @property
@@ -137,13 +149,13 @@ class Alarm:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self, urgent: bool = False) -> None:
-        """Begin sounding - phase 1, or straight to the siren if `urgent`.
+        """Begin sounding - phase 1, or straight to phase 2 if `urgent`.
         Does nothing if already sounding."""
         if not _HAVE_SOUND or self.sounding:
             return
         self._stop.clear()
-        # Set BEFORE the thread exists: set after, the thread can get one
-        # phase-1 beep out first (measured) - an SOS must open on the siren.
+        # Set BEFORE the thread exists: set after, the thread can get a
+        # phase-1 sound out first (measured) - an SOS must open escalated.
         if urgent:
             self._urgent.set()
         else:
@@ -156,7 +168,7 @@ class Alarm:
         self._thread.start()
 
     def escalate(self) -> None:
-        """Go to the siren now (window expired, or SOS). Starts the alarm if
+        """Go to phase 2 now (window expired, or SOS). Starts the alarm if
         it is not already sounding."""
         if self.sounding:
             self._urgent.set()
@@ -174,44 +186,46 @@ class Alarm:
         def left() -> float:
             return _MAX_SECONDS - (time.monotonic() - t0)
 
-        # Phase 1: two-tone beep until escalated, timed out, or stopped.
-        while left() > 0 and not self._stop.is_set():
-            if self._urgent.is_set() or time.monotonic() - t0 >= _URGENT_AFTER_S:
-                break
-            for freq, ms in _PATTERN:
-                if self._stop.is_set() or self._urgent.is_set():
-                    break
-                try:
-                    winsound.Beep(freq, ms)
-                except RuntimeError:
-                    # Some audio configurations refuse Beep. Silence is an
-                    # acceptable degradation; a crash during an alarm is not.
-                    return
+        def phase1_over() -> bool:
+            return (self._stop.is_set() or self._urgent.is_set()
+                    or time.monotonic() - t0 >= _URGENT_AFTER_S or left() <= 0)
 
-        if self._stop.is_set() or left() <= 0:
-            return
+        def phase2_over() -> bool:
+            return self._stop.is_set() or left() <= 0
 
-        # Phase 2: the siren, looping asynchronously until stop().
         try:
-            winsound.PlaySound(str(siren_path()), winsound.SND_FILENAME
-                               | winsound.SND_ASYNC | winsound.SND_LOOP)
-        except (RuntimeError, OSError) as exc:
-            self.siren_error = f"{type(exc).__name__}: {exc}"
-        else:
-            self.siren_error = ""
-            self._stop.wait(timeout=max(0.0, left()))
+            if not self._urgent.is_set():
+                self._play(winsound, MEDIUM, phase1_over)
+            if not self._stop.is_set() and left() > 0:
+                self._play(winsound, HIGH, phase2_over)
+        finally:
             try:
                 winsound.PlaySound(None, 0)
             except RuntimeError:
                 pass
+
+    def _play(self, winsound, spec, over) -> None:
+        """Loop one pattern until over(). WAV first; Beep if that fails."""
+        try:
+            winsound.PlaySound(str(wav_path(spec)), winsound.SND_FILENAME
+                               | winsound.SND_ASYNC | winsound.SND_LOOP)
+        except (RuntimeError, OSError) as exc:
+            self.siren_error = f"{type(exc).__name__}: {exc}"
+        else:
+            while not over():
+                self._stop.wait(0.05)
             return
 
-        # Siren would not play: fast beep instead, never silence.
-        while left() > 0 and not self._stop.is_set():
-            for freq, ms in _URGENT_PATTERN:
-                if self._stop.is_set():
+        # Same rhythm on the PC beeper - never silence.
+        _name, f0, _level, groups, gaps = spec
+        while not over():
+            for is_pulse, secs in timeline(groups, gaps):
+                if over():
                     return
-                try:
-                    winsound.Beep(freq, ms)
-                except RuntimeError:
-                    return
+                if is_pulse:
+                    try:
+                        winsound.Beep(int(f0), int(secs * 1000))
+                    except RuntimeError:
+                        return
+                else:
+                    self._stop.wait(secs)
