@@ -1,0 +1,44 @@
+FD Studio - fall alert for the wearer's laptop
+==============================================
+
+WHAT IS IN THIS FOLDER
+  FD Studio.exe        the program
+  alerts.bundle.json   phone-alert settings (sent to you privately - keep it
+                       private, do not post it anywhere)
+  START HERE.txt       this file
+
+Keep all of them together in one folder, e.g. Documents\FD Studio\.
+
+
+SETTING UP THE LAPTOP (once)
+  1. Double-click FD Studio.exe.
+     If Windows says "Windows protected your PC": More info -> Run anyway.
+  2. Turn on Bluetooth, and switch on the pendant.
+  3. In FD Studio: Scan -> choose "falldetect-datalog" -> Connect.
+  4. The wearer puts the pendant on and stands still.
+     Click "Calibrate upright" and hold still for 3 seconds.
+  5. Leave FD Studio open, the laptop plugged in, and sleep turned off
+     (Windows Settings -> System -> Power -> Sleep: Never).
+
+
+FAMILY: GET ALERTS ON YOUR PHONE
+  1. On the laptop: User tab -> "Get alerts on your phone".
+  2. Scan the QR code with your phone camera. Telegram opens -> press START.
+  3. For a LOUD alarm too: follow the ntfy steps in the bot's reply.
+  To stop the alerts: send /stop to the bot.
+
+
+WHAT HAPPENS ON AN ALERT
+  Possible fall : the laptop beeps for 30 s. No response -> loud alarm, and
+                  every phone gets a Telegram message and a loud ntfy alert.
+  SOS           : hold the pendant button for 1.5 s (or "Hold for SOS" on the
+                  laptop). Loud alarm and phone alerts straight away.
+  Pendant button: a short tap during an alert means "I'm OK".
+  Laptop        : "Silence alarm" stops the sound only.
+                  "They're OK - dismiss" ends the alert and tells the phones.
+
+
+LIMITS - PLEASE READ
+  - Alerts go out only while this laptop is ON, ONLINE and FD Studio is OPEN.
+  - Only ONE running FD Studio may use this Telegram bot at a time.
+  - This is a prototype, not a medical alarm service. It calls nobody.
