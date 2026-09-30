@@ -54,6 +54,11 @@ LABELS = [
     "fall_forward", "fall_backward", "fall_left", "fall_right",
     "fall_from_chair", "fall_slow_slump",
 ]
+# First entry of every label picker. A real label as the default meant a
+# reflex Enter after a fall filed it as "walking", where it scores as a false
+# alarm and drops out of the sensitivity count. Ground truth is the one thing
+# replay cannot recover, so nothing is pre-chosen for you.
+LABEL_PLACEHOLDER = "- choose -"
 
 TUNABLES = [
     ("freefall_mg", "Free-fall below", "mg", 100, 900),
@@ -355,7 +360,7 @@ class MainWindow(QMainWindow):
         self.in_subject = QLineEdit("s01")
         self.in_mount = QComboBox(); self.in_mount.addItems(MOUNTS)
         self.in_label = QComboBox(); self.in_label.setEditable(True)
-        self.in_label.addItems(LABELS)
+        self.in_label.addItems([LABEL_PLACEHOLDER] + LABELS)
         self.in_notes = QLineEdit()
         form.addRow(_label("Subject", "Caption"), self.in_subject)
         form.addRow(_label("Mount", "Caption"), self.in_mount)
@@ -796,7 +801,7 @@ class MainWindow(QMainWindow):
                 "falldetect-gkl fd_studio v1",
                 "label=?",                      # rewritten when it is named
                 f"mount={self.in_mount.currentText()}",
-                f"subject={self.in_subject.text().strip() or 'anon'}",
+                f"subject={_safe_label(self.in_subject.text()) or 'anon'}",
                 f"started={datetime.now().isoformat(timespec='seconds')}",
                 "units=accel milli-g, gyro deci-dps",
                 f"firmware={self.link.identity or 'unknown'}",
@@ -824,13 +829,21 @@ class MainWindow(QMainWindow):
             return
 
         secs = n / 208.0
+        # Pre-select the Activity set in the Debug inspector: that is the
+        # documented way to run a set of reps with the device button
+        # (DATA_COLLECTION.md step 2). With none set, nothing is pre-chosen.
+        items = [LABEL_PLACEHOLDER] + LABELS
+        preset = self.in_label.currentText().strip()
+        if preset and preset not in items:
+            items.insert(1, preset)
         label, ok = QInputDialog.getItem(
             self, "Name this recording",
             f"Recorded {n:,} samples ({secs:.0f} seconds).\n\n"
             f"What was it? Pick one, or type your own:",
-            LABELS, 0, True)
+            items, items.index(preset) if preset in items else 0, True)
 
-        label = _safe_label(label) if ok else ""
+        label = (_safe_label(label)
+                 if ok and label.strip() != LABEL_PLACEHOLDER else "")
         if not label:
             # Dismissing a dialog must never destroy a recording. A fall you
             # just took cannot be re-taken because you hit Escape.
@@ -861,7 +874,7 @@ class MainWindow(QMainWindow):
         in memory just to change one header line.
         """
         mount = self.in_mount.currentText()
-        subject = self.in_subject.text().strip() or "anon"
+        subject = _safe_label(self.in_subject.text()) or "anon"
         stamp = staged.stem.split("_recording")[0]
 
         dest_dir = DATA_DIR / mount / label
@@ -885,9 +898,16 @@ class MainWindow(QMainWindow):
     def start_recording(self) -> None:
         if not self.link:
             return
-        label = self.in_label.currentText().strip() or "unlabelled"
+        raw = self.in_label.currentText().strip()
+        # Sanitised: this goes straight into a path, and a ':' or '?' made
+        # open() raise inside the slot - invisible in the windowed exe.
+        label = "" if raw == LABEL_PLACEHOLDER else _safe_label(raw)
+        if not label:
+            self.say("pick an Activity before recording — a session saved "
+                     "under the wrong label scores as the wrong thing")
+            return
         mount = self.in_mount.currentText()
-        subject = self.in_subject.text().strip() or "anon"
+        subject = _safe_label(self.in_subject.text()) or "anon"
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = DATA_DIR / mount / label / f"{stamp}_{subject}_{label}.csv"
         header = [
