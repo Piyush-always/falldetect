@@ -18,3 +18,7 @@ data/sisfall/
 
 # Working copy extracted from an archived release zip by the OTA tooling.
 firmware/*.extracted.bin
+
+# Telegram bot token + ntfy topic, shipped NEXT TO FD Studio.exe (which is
+# committed and holds no secret). This file is the secret: never commit it.
+alerts.bundle.json

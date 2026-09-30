@@ -148,7 +148,9 @@ class SessionResult:
 
     @property
     def is_fall_label(self) -> bool:
-        return self.label.startswith("fall")
+        # Case-insensitive: a typed "Fall_forward" folder scored as a
+        # non-fall, so a missed fall counted as a correct TN (PR #1 review).
+        return self.label.lower().startswith("fall")
 
     @property
     def outcome(self) -> str:
@@ -202,20 +204,66 @@ def replay_csv(path: Path, thresholds: Thresholds | None = None,
                          samples=len(samples), events=list(engine.events))
 
 
+#: Labels that mean "nobody said what this was". Scoring one as ordinary
+#: activity inflates specificity, and a mislabelled fall silently leaves the
+#: sensitivity count.
+UNKNOWN_LABELS = {"?", "unlabelled"}
+
+#: Shorter than this is a mis-press, not a session.
+MIN_SESSION_S = 2.0
+
+
+def label_of(path: Path, root: Path) -> str | None:
+    """Ground-truth label for a recording, or None if it must not be scored.
+
+    The FOLDER is authoritative (data/<mount>/<label>/<file>), as the docs
+    and the Debug caption have always said. Anything outside that layout -
+    staging (_unsorted), other underscore dirs, the SisFall download - or
+    with an unknown label is excluded rather than counted as a non-fall.
+    """
+    parts = path.relative_to(root).parts
+    if len(parts) != 3 or parts[0].startswith("_") or parts[0] == "sisfall":
+        return None
+    if parts[1] in UNKNOWN_LABELS:
+        return None
+    return parts[1]
+
+
 def replay_corpus(root: Path, thresholds: Thresholds | None = None,
-                  odr_hz: int = 208) -> list[SessionResult]:
-    """Replay every recorded CSV under root (data/<mount>/<label>/*.csv).
+                  odr_hz: int = 208,
+                  notes: list[tuple[Path, str]] | None = None
+                  ) -> list[SessionResult]:
+    """Replay every labelled CSV under root (data/<mount>/<label>/*.csv).
 
     A session that fails to parse (wrong format, foreign dataset) is skipped
     rather than aborting the whole corpus — one bad file should not hide the
-    results for everything else.
+    results for everything else. Pass `notes` to learn what was skipped and
+    why, and where a header disagrees with its folder: a skip nobody sees
+    reads as "everything was scored".
     """
+    def note(p: Path, msg: str) -> None:
+        if notes is not None:
+            notes.append((p, msg))
+
     results = []
     for csv_path in sorted(root.rglob("*.csv")):
-        try:
-            results.append(replay_csv(csv_path, thresholds=thresholds, odr_hz=odr_hz))
-        except OSError:
+        label = label_of(csv_path, root)
+        if label is None:
+            note(csv_path, "skipped: not under <mount>/<label>/, or unlabelled")
             continue
+        try:
+            r = replay_csv(csv_path, thresholds=thresholds, odr_hz=odr_hz)
+        except OSError:
+            note(csv_path, "skipped: could not be read")
+            continue
+        if r.samples < MIN_SESSION_S * odr_hz:
+            note(csv_path, f"skipped: too short ({r.samples} samples)")
+            continue
+        if r.label != label:
+            note(csv_path, f"scored as '{label}' (its folder); "
+                           f"header says '{r.label}'")
+            r.label = label
+        results.append(r)
     return results
 
 

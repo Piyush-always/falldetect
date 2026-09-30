@@ -3,9 +3,20 @@
     Package FD Studio as a single shareable Windows exe.
 
 .DESCRIPTION
-    Produces FD Studio.exe in the repo root - no Python needed on the target PC, only
-    Windows 10/11 with Bluetooth. The exe keeps data\ and firmware\ in the
-    folder it is run from, so put it in its own folder before sharing.
+    Produces FD Studio.exe in the repo root - the ONE exe, tracked in git - no
+    Python needed on the target PC, only Windows 10/11 with Bluetooth. The exe
+    keeps data\ and firmware\ in the folder it is run from, so put it in its
+    own folder before sharing.
+
+    It contains NO bot token: the repo is public. To ship it with phone alerts
+    set up, send it together with alerts.bundle.json (repo root, git-ignored)
+    in the same folder:
+
+        { "telegram_bot_token": "123:ABC...", "ntfy_topic": "fd-sos-...",
+          "wearer_name": "Grandma" }
+
+    On first run the exe sets up phone alerts from that file. Send the file
+    privately: whoever has it can use the bot and read the alert topic.
 
     Builds in its own venv (build\exe-venv) rather than the system py -3.13:
     that interpreter carries the obsolete 'enum34' backport, which PyInstaller
@@ -28,11 +39,12 @@ if (-not (Test-Path $py)) {
     if ($LASTEXITCODE -ne 0) { throw "venv creation failed ($LASTEXITCODE)" }
 }
 & $py -m pip install --quiet --disable-pip-version-check `
-    pyinstaller PySide6 numpy pyserial bleak smpclient
+    pyinstaller PySide6 numpy pyserial bleak smpclient segno
 if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
 
 # bleak picks its WinRT backend at runtime and winrt is a namespace package,
 # so PyInstaller's static import scan misses both - collect them explicitly.
+# No --add-data: nothing secret goes inside the exe.
 & $py -m PyInstaller $entry `
     --name 'FD Studio' `
     --onefile --windowed --noconfirm --clean `
@@ -46,3 +58,4 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
 
 Write-Host "Built: $(Join-Path $repo 'FD Studio.exe')" -ForegroundColor Green
+Write-Host "To ship with phone alerts: send it with alerts.bundle.json (privately)." -ForegroundColor Cyan

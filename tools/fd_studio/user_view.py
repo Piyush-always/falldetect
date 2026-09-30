@@ -23,19 +23,25 @@ from __future__ import annotations
 import math
 import time
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRectF, Property, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, QRectF, Property,
+                            Qt, QTimer)
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout,
+                               QLabel, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
 from . import tokens as T
 from .engine import Activity, Posture, Stage
 
-# Seconds the wearer has to cancel before this would escalate to a caregiver.
-# PROJECT_OUTLINE.md section 6. Nothing is actually sent anywhere yet - there
-# is no cloud in v1 scope - so this is an honest preview of the real flow, not
-# a simulation pretending to alert someone.
+# Seconds the wearer has to cancel before this escalates to the family's
+# phones (notify.py, when set up). PROJECT_OUTLINE.md section 6. Sent from the
+# laptop, so only while it is on and online - the screen says what was
+# actually sent, never more.
 CANCEL_WINDOW_S = 30
+
+# How long the on-screen SOS button must be held. Same as the device's long
+# press (apps/datalog BUTTON_LONG_TICKS), so the two behave alike.
+SOS_HOLD_MS = 1500
 
 
 def _col(name: str) -> QColor:
@@ -131,7 +137,7 @@ class BigStatus(QWidget):
 class CancelCountdown(QWidget):
     """The 30 s cancel ring plus the button that stands the alert down."""
 
-    def __init__(self, on_cancel, parent=None):
+    def __init__(self, on_cancel, on_silence=None, parent=None):
         super().__init__(parent)
         self._remaining = CANCEL_WINDOW_S
         self._total = CANCEL_WINDOW_S
@@ -145,15 +151,39 @@ class CancelCountdown(QWidget):
         self._ring.setFixedHeight(120)
         lay.addWidget(self._ring)
 
+        row = QHBoxLayout()
+        row.setSpacing(T.S2)
+        # Silence stops the SOUND only: the alert stays on screen and the
+        # family is not told "all clear". For when someone is already on
+        # their way and the siren is just noise.
+        self.btn_silence = QPushButton("Silence alarm")
+        self.btn_silence.setMinimumHeight(48)
+        self.btn_silence.setVisible(False)
+        if on_silence is not None:
+            self.btn_silence.clicked.connect(on_silence)
+        row.addWidget(self.btn_silence)
+
         self.btn = QPushButton("I'm OK")
         self.btn.setObjectName("Danger")
         self.btn.setMinimumHeight(48)
         self.btn.clicked.connect(on_cancel)
-        lay.addWidget(self.btn)
+        row.addWidget(self.btn, 1)
+        lay.addLayout(row)
 
     def set_remaining(self, seconds: float) -> None:
         self._ring.set_fraction(max(0.0, seconds) / self._total)
         self._ring.set_label(str(int(math.ceil(max(0.0, seconds)))))
+
+    def set_expired(self, expired: bool, can_silence: bool = False) -> None:
+        """After the window: no ring to count, but the button must stay.
+
+        Hiding the whole widget at expiry left an alert nobody could
+        acknowledge - the only way out was starting a new test alarm.
+        can_silence: the siren is sounding, so offer to stop just the sound.
+        """
+        self._ring.setVisible(not expired)
+        self.btn.setText("They're OK — dismiss" if expired else "I'm OK")
+        self.btn_silence.setVisible(expired and can_silence)
 
 
 class _Ring(QWidget):
@@ -275,6 +305,81 @@ class ActivityBar(QWidget):
         p.drawPath(path)
 
 
+def _qr_pixmap(text: str, px: int = 8) -> QPixmap | None:
+    """A scannable QR code, or None if segno is not installed (the dialog
+    then shows the link alone). Black on white with the standard quiet
+    zone: a dark-theme QR is one many phone cameras refuse to read."""
+    try:
+        import segno
+    except ImportError:
+        return None
+    rows = list(segno.make(text, error="m").matrix_iter(scale=1, border=4))
+    size = len(rows) * px
+    pm = QPixmap(size, size)
+    pm.fill(Qt.white)
+    p = QPainter(pm)
+    p.setPen(Qt.NoPen)
+    p.setBrush(Qt.black)
+    for y, row in enumerate(rows):
+        for x, dark in enumerate(row):
+            if dark:
+                p.drawRect(x * px, y * px, px, px)
+    p.end()
+    return pm
+
+
+class SubscribeDialog(QDialog):
+    """'Get alerts on your phone': a QR code of the bot link, for a family
+    member standing at the laptop, and the link itself to send on."""
+
+    def __init__(self, link: str, why_not: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Get alerts on your phone")
+        self.setMinimumWidth(400)
+        # The app theme gives text a light colour but only #Root a dark
+        # background, so a bare dialog rendered light-on-white (measured).
+        self.setStyleSheet(f"QDialog {{ background: {T.c('surface_0')}; }}"
+                           f"QLabel {{ color: {T.c('text_1')}; }}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(T.S6, T.S6, T.S6, T.S6)
+        lay.setSpacing(T.S3)
+
+        if not link:
+            msg = QLabel(why_not)
+            msg.setWordWrap(True)
+            lay.addWidget(msg)
+        else:
+            head = QLabel("Scan with your phone's camera")
+            head.setStyleSheet("font-size: 18px; font-weight: 600;")
+            head.setAlignment(Qt.AlignHCenter)
+            lay.addWidget(head)
+            pm = _qr_pixmap(link)
+            if pm is not None:
+                qr = QLabel()
+                qr.setPixmap(pm)
+                qr.setAlignment(Qt.AlignHCenter)
+                lay.addWidget(qr)
+            how = QLabel("Telegram opens on the fall-alert bot: press START.\n"
+                         "That phone then gets a message whenever there is "
+                         "an alert.")
+            how.setWordWrap(True)
+            how.setAlignment(Qt.AlignHCenter)
+            lay.addWidget(how)
+            row = QHBoxLayout()
+            url = QLabel(link)
+            url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.addWidget(url, 1)
+            copy = QPushButton("Copy link")
+            copy.clicked.connect(lambda: (QApplication.clipboard().setText(link),
+                                          copy.setText("Copied ✓")))
+            row.addWidget(copy)
+            lay.addLayout(row)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close)
+
+
 class UserTab(QWidget):
     """Assembles the consumer view and translates Engine state into plain words."""
 
@@ -300,6 +405,27 @@ class UserTab(QWidget):
         # different code path rehearses nothing.
         self._test_fall = False
         self._cancelled_until = 0.0
+        # Phone alerts. This view decides WHEN (the cancel window ran out)
+        # and shows how it went; MainWindow owns the sending. Hooks:
+        #   on_escalate(source, started_at)
+        #   on_stand_down(escalated, by, started_at)   by: "screen"/"device"
+        self.on_escalate = None
+        self.on_stand_down = None
+        self.on_phone_settings = None
+        self.on_phone_test = None
+        # "", "sending", "sent", "failed" or "off" (not set up), plus the
+        # line to show with it. Set by MainWindow.
+        self.phone_state = ""
+        self.phone_detail = ""
+        self.phone_summary = ""
+        self._escalated = False
+        # Long press on the device button. Escalates at once - no cancel
+        # window, the wearer asked for help themselves.
+        self._sos = False
+        self.sos_source = ""            # "device" or "laptop"
+        # Called when an alert starts, so MainWindow can bring this tab to
+        # the front.
+        self.on_alert_started = None
         self._activity: list[float] = []
         self._last_activity_push = 0.0
 
@@ -323,7 +449,10 @@ class UserTab(QWidget):
         self.status = BigStatus()
         lay.addWidget(self.status)
 
-        self.countdown = CancelCountdown(self._cancel_alert)
+        self.on_silence = None
+        self.countdown = CancelCountdown(
+            lambda: self._cancel_alert("screen"),
+            lambda: self.on_silence and self.on_silence())
         lay.addWidget(self.countdown)
 
         lay.addWidget(self._caption("MOVEMENT TODAY"))
@@ -369,6 +498,60 @@ class UserTab(QWidget):
         self.btn_test.clicked.connect(self._test_alarm)
         lay.addWidget(self.btn_test)
 
+        # SOS from the laptop: the SAME path as the device's long press, for
+        # someone at the screen - and the way to try phone alerts with no
+        # device. Hold, not click, like the device: this rings phones, and a
+        # stray click must not.
+        self.on_sos = None
+        self.btn_sos = QPushButton("Hold for SOS")
+        self.btn_sos.setObjectName("Danger")
+        self.btn_sos.setMinimumHeight(48)
+        self._sos_hold = QTimer(self)
+        self._sos_hold.setSingleShot(True)
+        self._sos_hold.setInterval(SOS_HOLD_MS)
+        self._sos_hold.timeout.connect(self._sos_held)
+        self.btn_sos.pressed.connect(self._sos_pressed)
+        self.btn_sos.released.connect(self._sos_released)
+        lay.addWidget(self.btn_sos)
+
+        # Getting alerts on a phone: ONE button for the family (user
+        # feedback 2026-09-30 - the status text, topic and two setup buttons
+        # were too much). The details sit behind "More": they are for whoever
+        # sets it up, and the ntfy topic is private anyway.
+        # get_subscribe_link() -> (link, why_not); set by MainWindow.
+        self.get_subscribe_link = None
+        self.btn_subscribe = QPushButton("📱  Get alerts on your phone")
+        self.btn_subscribe.setMinimumHeight(44)
+        self.btn_subscribe.clicked.connect(self._show_subscribe)
+        lay.addWidget(self.btn_subscribe)
+
+        self.btn_more = QPushButton("More ▾")
+        self.btn_more.setFlat(True)
+        self.btn_more.clicked.connect(self._toggle_more)
+        lay.addWidget(self.btn_more, 0, Qt.AlignHCenter)
+
+        self.more = QWidget()
+        self.more.setVisible(False)
+        mlay = QVBoxLayout(self.more)
+        mlay.setContentsMargins(0, 0, 0, 0)
+        mlay.setSpacing(T.S2)
+        self.lbl_phone = QLabel("")
+        self.lbl_phone.setObjectName("Caption")
+        self.lbl_phone.setWordWrap(True)
+        self.lbl_phone.setAlignment(Qt.AlignHCenter)
+        mlay.addWidget(self.lbl_phone)
+        prow = QHBoxLayout()
+        self.btn_phone_settings = QPushButton("Phone alert settings")
+        self.btn_phone_settings.clicked.connect(
+            lambda: self.on_phone_settings and self.on_phone_settings())
+        self.btn_phone_test = QPushButton("Send test to phones")
+        self.btn_phone_test.clicked.connect(
+            lambda: self.on_phone_test and self.on_phone_test())
+        prow.addWidget(self.btn_phone_settings)
+        prow.addWidget(self.btn_phone_test)
+        mlay.addLayout(prow)
+        lay.addWidget(self.more)
+
         lay.addStretch(1)
 
         # Device footer: battery, charge state, firmware version. Quiet by
@@ -385,11 +568,23 @@ class UserTab(QWidget):
         foot.addWidget(self.lbl_fw)
         lay.addLayout(foot)
 
-        row = QHBoxLayout()
+        # Scrolls when the window is short. Without it, below ~750 px of
+        # height Qt squeezed the column and drew the movement bar and the
+        # position buttons OVER the status panel - hiding the one element
+        # that must always be readable.
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addStretch(1)
         row.addWidget(centre)
         row.addStretch(1)
-        outer.addLayout(row, 1)
+        scroll = self._scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        scroll.setWidget(page)
+        outer.addWidget(scroll, 1)
 
 
     def _update_footer(self, link) -> None:
@@ -453,17 +648,63 @@ class UserTab(QWidget):
         tag = " (test)" if self._test_fall else ""
         remaining = CANCEL_WINDOW_S - (now - self._fall_started)
 
+        if self._sos:
+            at = time.strftime("%H:%M", time.localtime(self._fall_started))
+            sub = {
+                "sent": f"Pressed at {at}. {self.phone_detail} Someone should "
+                        f"still check on them in person.",
+                "sending": f"Pressed at {at}. Sending to phones now...",
+                "failed": f"Pressed at {at}. Alert NOT sent. "
+                          f"{self.phone_detail} Go and check on them now.",
+                "unconfirmed": f"Pressed at {at}. {self.phone_detail} "
+                               f"Go and check on them now.",
+            }.get(self.phone_state,
+                  f"Pressed at {at}. Phone alerts are not set up, so nobody "
+                  f"was contacted. Go and check on them now.")
+            self.status.set_state("Emergency button pressed", sub, "danger", True)
+            self.countdown.setVisible(True)
+            self.countdown.set_expired(True, self._sounding())
+            return
+
         if remaining <= 0:
-            self.status.set_state("Help is being called" + tag,
-                                  "No response after 30 seconds.",
-                                  "danger", True)
-            self.countdown.setVisible(False)
+            # Say exactly what was done, never more. "Help is being called"
+            # while nothing was sent told a family member they did not need
+            # to go and check, which is how someone gets hurt.
+            if self._test_fall:
+                title, sub = ("No response — go and check" + tag,
+                              "This was a test. No phones were alerted.")
+            elif self.phone_state == "sent":
+                title, sub = ("No response — family alerted",
+                              f"{self.phone_detail} Someone should still "
+                              f"check on them in person.")
+            elif self.phone_state == "sending":
+                title, sub = ("No response — alerting family",
+                              "Sending to phones now...")
+            elif self.phone_state == "failed":
+                title, sub = ("No response — alert NOT sent",
+                              f"{self.phone_detail} Go and check on them now.")
+            elif self.phone_state == "unconfirmed":
+                title, sub = ("No response — alert NOT confirmed",
+                              f"{self.phone_detail} Go and check on them now.")
+            elif self.phone_state == "recording":
+                title, sub = ("No response — go and check",
+                              "A recording is running (data collection), so "
+                              "phones were not alerted.")
+            else:
+                title, sub = ("No response — go and check",
+                              "Phone alerts are not set up, so nobody was "
+                              "contacted. Someone needs to check on them in "
+                              "person.")
+            self.status.set_state(title, sub, "danger", True)
+            self.countdown.setVisible(True)
+            self.countdown.set_expired(True, self._sounding())
             return
 
         self.status.set_state("Possible fall" + tag,
                               "Press I'm OK if this was not a fall.",
                               "danger", True)
         self.countdown.setVisible(True)
+        self.countdown.set_expired(False)
         self.countdown.set_remaining(remaining)
 
     def _test_alarm(self) -> None:
@@ -471,27 +712,102 @@ class UserTab(QWidget):
 
         Doubles as a stop because an alarm with no visible way to silence it
         is a fault, not a feature. "I'm OK" only appears during the alert
-        screen; this button is always on the page.
+        screen; this button is always on the page. Any alert in progress,
+        real or test, is stood down rather than replaced by a new test.
         """
-        if self._test_fall or (self._is_sounding is not None
-                               and self._is_sounding()):
+        if self._alert_active():
             self._cancel_alert()
             return
         self._test_fall = True
         self._fall_started = time.time()
+        self._alert_started_hook()
         self._cancelled_until = 0.0
         if self._on_alarm is not None:
             self._on_alarm(True)
 
-    def _cancel_alert(self) -> None:
+    def _alert_active(self) -> bool:
+        return (self._test_fall or self._fall_started is not None
+                or (self._is_sounding is not None and self._is_sounding()))
+
+    def _alert_started_hook(self) -> None:
+        """An alert just started: scroll back to the status panel (someone
+        may have left the page scrolled down to the phone buttons) and let
+        MainWindow bring this tab forward (PR #1 review)."""
+        self._scroll.verticalScrollBar().setValue(0)
+        if self.on_alert_started is not None:
+            self.on_alert_started()
+
+    def _toggle_more(self) -> None:
+        show = not self.more.isVisible()
+        self.more.setVisible(show)
+        self.btn_more.setText("Less ▴" if show else "More ▾")
+
+    def _show_subscribe(self) -> None:
+        link, why_not = (self.get_subscribe_link() if self.get_subscribe_link
+                         else ("", "Phone alerts are not available."))
+        SubscribeDialog(link, why_not, self).exec()
+
+    def _sos_pressed(self) -> None:
+        self.btn_sos.setText("Keep holding…")
+        self._sos_hold.start()
+
+    def _sos_released(self) -> None:
+        # Let go early: nothing happens, exactly like the device.
+        self._sos_hold.stop()
+        self.btn_sos.setText("Hold for SOS")
+
+    def _sos_held(self) -> None:
+        self.btn_sos.setText("SOS sent — release")
+        if self.on_sos is not None:
+            self.on_sos()
+
+    def _sounding(self) -> bool:
+        return self._is_sounding is not None and self._is_sounding()
+
+    def raise_sos(self, source: str = "device") -> bool:
+        """SOS - "device" (long press) or "laptop" (Hold for SOS).
+
+        True for a NEW SOS. The device repeats $H every 2 s until the host
+        acknowledges, so repeats are expected and must not re-alert anyone.
+        """
+        if self._sos:
+            return False
+        self._sos = True
+        self.sos_source = source
+        self._alert_started_hook()
+        self._test_fall = False
+        self._fall_started = time.time()
+        self._escalated = True          # the caller alerts the phones now
+        self.phone_state, self.phone_detail = "", ""
+        return True
+
+    def device_alert_mode(self) -> bytes:
+        """What the device should show: b"C" nothing, b"A" cancel window
+        open (slow red), b"F" alarm (fast red)."""
+        if self._fall_started is None:
+            return b"C"
+        if self._sos or time.time() - self._fall_started >= CANCEL_WINDOW_S:
+            return b"F"
+        return b"A"
+
+    def _cancel_alert(self, by: str = "screen") -> None:
+        """Stand the alert down. `by` is who did it: "screen" or "device"."""
+        started, escalated, test = (self._fall_started, self._escalated,
+                                    self._test_fall)
         self._fall_started = None
         self._test_fall = False
+        self._escalated = False
+        self._sos = False
+        self.sos_source = ""
+        self.phone_state, self.phone_detail = "", ""
         if self._on_alarm is not None:
             self._on_alarm(False)
         # Suppress re-alerting on the tail of the same event. The engine's own
         # refractory window covers the detector; this covers the UI.
         self._cancelled_until = time.time() + 10.0
         self.countdown.setVisible(False)
+        if started is not None and not test and self.on_stand_down is not None:
+            self.on_stand_down(escalated, by, started)
 
     # ── refresh ──────────────────────────────────────────────────────────────
     def tick(self) -> None:
@@ -500,12 +816,30 @@ class UserTab(QWidget):
         now = time.time()
 
         self._update_footer(link)
+        self.lbl_phone.setText(self.phone_summary)
+
+        # Escalation runs off the clock, not off drawing the screen. The
+        # phones must be alerted even when the render below is skipped - a
+        # fall that knocks the device out of range is exactly that case.
+        if (self._fall_started is not None and not self._test_fall
+                and not self._escalated
+                and now - self._fall_started >= CANCEL_WINDOW_S):
+            self._escalated = True
+            if self.on_escalate is not None:
+                self.on_escalate("fall", self._fall_started)
 
         # Recording strip. Shown only while recording, so it reads as a state
         # rather than as decoration.
-        sounding = self._is_sounding() if self._is_sounding else False
-        self.btn_test.setText("Stop alarm" if (sounding or self._test_fall)
-                              else "Test alarm")
+        # Says what pressing it does. On a real alert it DISMISSES (and tells
+        # the family "all clear"), which is not the same as silencing.
+        if self._test_fall:
+            self.btn_test.setText("Stop test")
+        elif self._fall_started is not None:
+            self.btn_test.setText("Dismiss alert")
+        elif self._sounding():
+            self.btn_test.setText("Stop alarm")
+        else:
+            self.btn_test.setText("Test alarm")
 
         rec = link is not None and getattr(link, "recording", False)
         if rec:
@@ -522,10 +856,11 @@ class UserTab(QWidget):
         self.btn_record.setEnabled(link is not None)
         self.btn_record.setText("Stop and save" if rec else "Start recording")
 
-        # A rehearsal must run with no device attached. Practising the demo
-        # should not require hardware, and the connection branches below
-        # return early - which silently made "Test alarm" do nothing.
-        if self._test_fall:
+        # An alert in progress outranks every connection state. A rehearsal
+        # must run with no device attached, and a real alert must not vanish
+        # behind "Not connected" when the link drops mid-countdown - that hid
+        # the I'm OK button and the escalation result.
+        if self._test_fall or self._fall_started is not None:
             self._render_alert(now)
             return
 
@@ -561,6 +896,18 @@ class UserTab(QWidget):
             self.countdown.setVisible(False)
             return
 
+        if stats["stale"] > 3.0 and stats["link_stale"] <= 3.0:
+            # Status lines still arriving, samples not: the link is fine and
+            # the motion sensor is not. Red, because nothing can be detected,
+            # and "move closer" would send them to fix the wrong thing.
+            self.status.set_state("Sensor stopped",
+                                  "The device is connected but its motion "
+                                  "sensor has stopped. Falls cannot be "
+                                  "detected. Switch the device off and on.",
+                                  "danger", True)
+            self.countdown.setVisible(False)
+            return
+
         if stats["stale"] > 3.0:
             self.status.set_state("Signal lost",
                                   "Move closer to the device, or check it is "
@@ -583,6 +930,7 @@ class UserTab(QWidget):
         if (engine.stage is Stage.CONFIRMED or self._test_fall)                 and now > self._cancelled_until:
             if self._fall_started is None:
                 self._fall_started = now
+                self._alert_started_hook()
         if self._fall_started is not None:
             self._render_alert(now)
             return

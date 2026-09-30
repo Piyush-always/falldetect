@@ -79,7 +79,12 @@ class LinkBase:
         self.samples = 0
         self.gaps = 0
         self.last_seq: int | None = None
+        # Two clocks on purpose. last_rx moves on ANY bytes; the 1 Hz $S/$P/
+        # $V status lines keep it fresh even when the IMU has stopped, which
+        # left the tool showing "Live" while nothing could be detected.
+        # Staleness is judged on samples; last_rx only says the link is up.
         self.last_rx = time.time()
+        self.last_sample_rx = time.time()
         self.rate = 0.0
         self.identity = ""
         # Battery, from the device's $V line. None until first seen.
@@ -105,6 +110,11 @@ class LinkBase:
 
     def shutdown(self) -> None:
         self._stop.set()
+
+    def send_command(self, cmd: bytes) -> bool:
+        """Host -> device alert command ('A'/'F'/'C'/'H'). Only the BLE
+        transport can send; datalog does not read its USB CDC input."""
+        return False
 
     # ── parsing ──────────────────────────────────────────────────────────────
     def feed_bytes(self, data: bytes) -> None:
@@ -150,8 +160,12 @@ class LinkBase:
                 self.battery_mv = int(p[2])
                 self.charging = p[3] == "1"
             elif p[0] == "$C" and len(p) == 2:
-                # Wearer long-pressed to stand the alarm down.
+                # Wearer tapped the button during an alert to stand it down.
                 self.events.put(("cancel", int(p[1])))
+            elif p[0] == "$H" and len(p) == 2:
+                # Long press: SOS. The device repeats it every 2 s until
+                # acknowledged with 'H', so duplicates are expected.
+                self.events.put(("sos", int(p[1])))
             elif p[0] == "$B" and len(p) == 3:
                 # Cancel button. Surfaced as an event so the alert flow can
                 # consume it later without polling.
@@ -174,6 +188,7 @@ class LinkBase:
                 self.gaps += 1
             self.last_seq = seq
             self.samples += 1
+            self.last_sample_rx = now
 
             t0, n0 = self._rate_mark
             if now - t0 >= 1.0:
@@ -227,11 +242,16 @@ class LinkBase:
     # ── snapshot for the GUI ─────────────────────────────────────────────────
     def stats(self) -> dict:
         with self._lock:
+            now = time.time()
+            stale = now - self.last_sample_rx
             return {
                 "samples": self.samples,
                 "gaps": self.gaps,
-                "rate": self.rate,
-                "stale": time.time() - self.last_rx,
+                # rate is only recomputed when a sample arrives, so without
+                # this it freezes at its last value once samples stop.
+                "rate": self.rate if stale < 1.0 else 0.0,
+                "stale": stale,
+                "link_stale": now - self.last_rx,
                 "rec_n": self._csv_n if self._csv else 0,
             }
 

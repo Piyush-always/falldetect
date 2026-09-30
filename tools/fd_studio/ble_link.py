@@ -43,6 +43,10 @@ from .link import LinkBase
 # the device notifies on TX, so that is the one this host subscribes to.
 NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 NUS_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+# The device's receive side: single-byte alert commands, see
+# apps/datalog/src/main.c nus_received(). Written WITH response - NCS's NUS
+# RX allows both, and an acknowledged write is how we learn it arrived.
+NUS_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 
 DEVICE_NAME_PREFIX = "falldetect"
 
@@ -132,6 +136,32 @@ class BleDeviceLink(LinkBase):
         super().__init__(engine)
         self.target = target
         self._future = None
+        self._client: BleakClient | None = None
+
+    def send_command(self, cmd: bytes) -> bool:
+        """Queue a write to the device. False if not connected right now.
+
+        Fire-and-report: a failed write comes back as a log event, and the
+        caller re-sends its state periodically, so one lost write is never
+        the end of it.
+        """
+        client = self._client
+        if client is None or not client.is_connected:
+            return False
+
+        async def _write() -> None:
+            await client.write_gatt_char(NUS_RX_UUID, cmd, response=True)
+
+        def _done(fut) -> None:
+            if fut.cancelled():
+                return
+            exc = fut.exception()
+            if exc is not None:
+                self.events.put(("log", f"device command {cmd!r} failed: "
+                                        f"{explain(exc)}"))
+
+        BleWorker.instance().submit(_write()).add_done_callback(_done)
+        return True
 
     def start(self) -> None:
         self._future = BleWorker.instance().submit(self._run())
@@ -186,9 +216,13 @@ class BleDeviceLink(LinkBase):
                 return
 
             self.events.put(("log", f"connected to {self.target}"))
+            self._client = client
 
-            while not self._stop.is_set() and not disconnected.is_set():
-                await asyncio.sleep(0.2)
+            try:
+                while not self._stop.is_set() and not disconnected.is_set():
+                    await asyncio.sleep(0.2)
+            finally:
+                self._client = None
 
             if disconnected.is_set():
                 self.events.put(("error", "Device disconnected."))
