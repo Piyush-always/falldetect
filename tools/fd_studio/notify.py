@@ -38,8 +38,9 @@ Standard library only, so the packaged exe gains no dependency.
 
 SECRETS
 -------
-The bot token and the subscriber list live in %APPDATA%\\FD Studio\\alerts.json
-- outside the repo, so they cannot be committed. A shipped exe can carry a
+The bot token and the subscriber list live in %USERPROFILE%\\.fd_studio\\
+alerts.json - outside the repo, so they cannot be committed (and not in
+AppData: see CONFIG_PATH). A shipped exe can carry a
 token (tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored);
 on first run it seeds the settings file from that. Such an exe contains the
 token: share it privately, never commit or publish it.
@@ -60,11 +61,17 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+#: In the home folder, NOT %APPDATA%. The Microsoft Store Python (what
+#: fd_studio.ps1 finds on this machine) is an MSIX-packaged app, and Windows
+#: silently redirects its AppData writes to a private copy under
+#: AppData\Local\Packages\...\LocalCache. The source-run tool and the exe then
+#: read two different alerts.json files - measured 2026-09-30: the exe held
+#: the token and a subscriber, the source run an empty template, so an SOS
+#: reported "not set up". The home folder is not virtualised.
 #: FD_STUDIO_ALERTS_FILE overrides the location - for tests, so they can
 #: never touch (or poll with) a real bot.
 CONFIG_PATH = Path(os.environ.get("FD_STUDIO_ALERTS_FILE") or
-                   (Path(os.environ.get("APPDATA") or Path.home())
-                    / "FD Studio" / "alerts.json"))
+                   (Path.home() / ".fd_studio" / "alerts.json"))
 
 #: Name of the token file build_exe.ps1 bundles into a shipped exe.
 BUNDLE_NAME = "alerts.bundle.json"

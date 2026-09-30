@@ -82,7 +82,9 @@ the repo root (git-ignored), then build:
 (git-ignored). On its first run that exe sets up phone alerts by itself.
 **That exe contains the token — share it privately, never commit it.**
 Settings, including the subscriber list, live in
-`%APPDATA%\FD Studio\alerts.json` on the machine running it.
+`%USERPROFILE%\.fd_studio\alerts.json` on the machine running it — not in
+AppData, because the Microsoft Store Python gets a private, redirected copy of
+AppData and would read a different file from the exe.
 
 Limits — say these out loud to whoever relies on it:
 
