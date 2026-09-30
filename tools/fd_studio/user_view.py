@@ -25,9 +25,10 @@ import time
 
 from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, QRectF, Property,
                             Qt, QTimer)
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout,
+                               QLabel, QPushButton, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from . import tokens as T
 from .engine import Activity, Posture, Stage
@@ -304,6 +305,81 @@ class ActivityBar(QWidget):
         p.drawPath(path)
 
 
+def _qr_pixmap(text: str, px: int = 8) -> QPixmap | None:
+    """A scannable QR code, or None if segno is not installed (the dialog
+    then shows the link alone). Black on white with the standard quiet
+    zone: a dark-theme QR is one many phone cameras refuse to read."""
+    try:
+        import segno
+    except ImportError:
+        return None
+    rows = list(segno.make(text, error="m").matrix_iter(scale=1, border=4))
+    size = len(rows) * px
+    pm = QPixmap(size, size)
+    pm.fill(Qt.white)
+    p = QPainter(pm)
+    p.setPen(Qt.NoPen)
+    p.setBrush(Qt.black)
+    for y, row in enumerate(rows):
+        for x, dark in enumerate(row):
+            if dark:
+                p.drawRect(x * px, y * px, px, px)
+    p.end()
+    return pm
+
+
+class SubscribeDialog(QDialog):
+    """'Get alerts on your phone': a QR code of the bot link, for a family
+    member standing at the laptop, and the link itself to send on."""
+
+    def __init__(self, link: str, why_not: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Get alerts on your phone")
+        self.setMinimumWidth(400)
+        # The app theme gives text a light colour but only #Root a dark
+        # background, so a bare dialog rendered light-on-white (measured).
+        self.setStyleSheet(f"QDialog {{ background: {T.c('surface_0')}; }}"
+                           f"QLabel {{ color: {T.c('text_1')}; }}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(T.S6, T.S6, T.S6, T.S6)
+        lay.setSpacing(T.S3)
+
+        if not link:
+            msg = QLabel(why_not)
+            msg.setWordWrap(True)
+            lay.addWidget(msg)
+        else:
+            head = QLabel("Scan with your phone's camera")
+            head.setStyleSheet("font-size: 18px; font-weight: 600;")
+            head.setAlignment(Qt.AlignHCenter)
+            lay.addWidget(head)
+            pm = _qr_pixmap(link)
+            if pm is not None:
+                qr = QLabel()
+                qr.setPixmap(pm)
+                qr.setAlignment(Qt.AlignHCenter)
+                lay.addWidget(qr)
+            how = QLabel("Telegram opens on the fall-alert bot: press START.\n"
+                         "That phone then gets a message whenever there is "
+                         "an alert.")
+            how.setWordWrap(True)
+            how.setAlignment(Qt.AlignHCenter)
+            lay.addWidget(how)
+            row = QHBoxLayout()
+            url = QLabel(link)
+            url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.addWidget(url, 1)
+            copy = QPushButton("Copy link")
+            copy.clicked.connect(lambda: (QApplication.clipboard().setText(link),
+                                          copy.setText("Copied ✓")))
+            row.addWidget(copy)
+            lay.addLayout(row)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close)
+
+
 class UserTab(QWidget):
     """Assembles the consumer view and translates Engine state into plain words."""
 
@@ -434,13 +510,32 @@ class UserTab(QWidget):
         self.btn_sos.released.connect(self._sos_released)
         lay.addWidget(self.btn_sos)
 
-        # Who gets told when nobody responds. On this tab, because "does
-        # anyone get alerted?" is the family's question, not a debug detail.
+        # Getting alerts on a phone: ONE button for the family (user
+        # feedback 2026-09-30 - the status text, topic and two setup buttons
+        # were too much). The details sit behind "More": they are for whoever
+        # sets it up, and the ntfy topic is private anyway.
+        # get_subscribe_link() -> (link, why_not); set by MainWindow.
+        self.get_subscribe_link = None
+        self.btn_subscribe = QPushButton("📱  Get alerts on your phone")
+        self.btn_subscribe.setMinimumHeight(44)
+        self.btn_subscribe.clicked.connect(self._show_subscribe)
+        lay.addWidget(self.btn_subscribe)
+
+        self.btn_more = QPushButton("More ▾")
+        self.btn_more.setFlat(True)
+        self.btn_more.clicked.connect(self._toggle_more)
+        lay.addWidget(self.btn_more, 0, Qt.AlignHCenter)
+
+        self.more = QWidget()
+        self.more.setVisible(False)
+        mlay = QVBoxLayout(self.more)
+        mlay.setContentsMargins(0, 0, 0, 0)
+        mlay.setSpacing(T.S2)
         self.lbl_phone = QLabel("")
         self.lbl_phone.setObjectName("Caption")
         self.lbl_phone.setWordWrap(True)
         self.lbl_phone.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.lbl_phone)
+        mlay.addWidget(self.lbl_phone)
         prow = QHBoxLayout()
         self.btn_phone_settings = QPushButton("Phone alert settings")
         self.btn_phone_settings.clicked.connect(
@@ -450,7 +545,8 @@ class UserTab(QWidget):
             lambda: self.on_phone_test and self.on_phone_test())
         prow.addWidget(self.btn_phone_settings)
         prow.addWidget(self.btn_phone_test)
-        lay.addLayout(prow)
+        mlay.addLayout(prow)
+        lay.addWidget(self.more)
 
         lay.addStretch(1)
 
@@ -618,6 +714,16 @@ class UserTab(QWidget):
     def _alert_active(self) -> bool:
         return (self._test_fall or self._fall_started is not None
                 or (self._is_sounding is not None and self._is_sounding()))
+
+    def _toggle_more(self) -> None:
+        show = not self.more.isVisible()
+        self.more.setVisible(show)
+        self.btn_more.setText("Less ▴" if show else "More ▾")
+
+    def _show_subscribe(self) -> None:
+        link, why_not = (self.get_subscribe_link() if self.get_subscribe_link
+                         else ("", "Phone alerts are not available."))
+        SubscribeDialog(link, why_not, self).exec()
 
     def _sos_pressed(self) -> None:
         self.btn_sos.setText("Keep holding…")

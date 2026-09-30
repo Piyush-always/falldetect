@@ -176,6 +176,7 @@ class MainWindow(QMainWindow):
         self.user_tab.on_phone_test = self._phone_test
         self.user_tab.on_sos = self._screen_sos
         self.user_tab.on_silence = self._silence_alarm
+        self.user_tab.get_subscribe_link = self._subscribe_link
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -613,6 +614,20 @@ class MainWindow(QMainWindow):
         if key != self._dev_alert_key or now - self._dev_alert_t > 5.0:
             if link.send_command(want):
                 self._dev_alert_key, self._dev_alert_t = key, now
+
+    def _subscribe_link(self) -> tuple[str, str]:
+        """(bot link, "") for the subscribe button, or ("", why not)."""
+        cfg, problem = self.notifier.config()
+        if problem:
+            return "", f"The phone-alert settings file is broken: {problem}"
+        if not cfg.telegram_bot_token:
+            return "", ("Phone alerts are not set up on this laptop yet. "
+                        "Open More → Phone alert settings.")
+        if not self.notifier.share_link:
+            # The link comes from the bot itself (getMe), once online.
+            return "", ("Still connecting to Telegram. Check this laptop is "
+                        "online, then try again in a moment.")
+        return "https://" + self.notifier.share_link, ""
 
     def _phone_settings(self) -> None:
         path = ensure_config_file()

@@ -47,7 +47,7 @@ if (-not (Test-Path $py)) {
     if ($LASTEXITCODE -ne 0) { throw "venv creation failed ($LASTEXITCODE)" }
 }
 & $py -m pip install --quiet --disable-pip-version-check `
-    pyinstaller PySide6 numpy pyserial bleak smpclient
+    pyinstaller PySide6 numpy pyserial bleak smpclient segno
 if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
 
 # bleak picks its WinRT backend at runtime and winrt is a namespace package,
