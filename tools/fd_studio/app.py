@@ -35,7 +35,7 @@ from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
 from .log_view import LogTab
-from .notify import Notifier, ensure_config_file
+from .notify import Notifier, ensure_config_file, seed_from_bundle
 from .ota_view import OtaTab
 from .replay import replay_corpus, summarize
 from .user_view import CANCEL_WINDOW_S, UserTab
@@ -126,6 +126,13 @@ class MainWindow(QMainWindow):
         self._scanning = False
         self.alarm = Alarm()
         self.notifier = Notifier()
+        # A shipped exe carries the bot token; on first run it becomes this
+        # machine's settings, so the person receiving it configures nothing.
+        if seed_from_bundle(self.notifier.config_path):
+            self.notifier.results.put(("log", "phone alerts: set up from the "
+                                              "bot token bundled in this exe"))
+        # Picks up /start and /stop from the bot for as long as we run.
+        self.notifier.start_listening()
         # Tag of the phone alert for the alert on screen now, so a result
         # arriving after that alert was dismissed updates nothing on screen.
         self._alert_tag: str | None = None

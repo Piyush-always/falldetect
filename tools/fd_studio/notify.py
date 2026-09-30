@@ -1,31 +1,48 @@
 """
 Phone alerts: a Telegram message, and a Telegram voice call via CallMeBot.
 
-WHY THESE TWO
+WHO GETS THEM
 -------------
+Anyone who opens the bot in Telegram and presses Start. FD Studio listens to
+the bot while it runs: /start (or any first message) adds that chat to the
+alert list and replies with a welcome, /stop removes it. Adding the bot to a
+family group subscribes the whole group. Nobody edits a file by hand.
+
+Anyone who finds the bot can subscribe - bot names are searchable - so every
+new subscriber is announced (silently) to everyone already on the list. A
+stranger joining is then seen, not hidden.
+
+WHY THESE TWO SERVICES
+----------------------
 Free, instant, and no business verification. The Telegram Bot API is official
-and reliable, but a message is only a notification and can be muted. The
-CallMeBot call actually RINGS the phone and reads the alert aloud - that is
-the part that wakes someone - but it is a free third-party service for
-personal use with no guarantee behind it. So the message is the channel of
-record and the call is the loud one; neither is trusted alone.
+and reliable, but a message is only a notification and can be muted. A bot
+cannot place calls, so the CallMeBot call is what RINGS the phone and reads
+the alert aloud - a free third-party service for personal use with no
+guarantee. It needs each person to press Start on @CallMeBot_txtbot once and
+to have a Telegram username; the welcome message says so, and a person whose
+call is refused gets told again. The message is the channel of record; the
+call is the loud one; neither is trusted alone.
 
 WHAT THIS IS NOT
 ----------------
 Sent from the laptop, over the laptop's internet. Laptop asleep, offline, or
-FD Studio closed means nothing is sent - which is why every send reports
-success or failure back to the screen, and a failure is shown as "NOT sent",
-never swallowed.
+FD Studio closed means nothing is sent - and new subscribers are not picked
+up either. Every send reports success or failure back to the screen; a
+failure is shown as "NOT sent", never swallowed. Only ONE running FD Studio
+may use a bot: Telegram hands each update to one listener, so two would split
+the subscribers between them.
 
-Deliberately no Qt import (same rule as engine.py): sends run on a plain
-thread and report through a queue the GUI drains on its timer, so a slow
-network can never freeze the window mid-alarm. Standard library only, so the
-packaged exe gains no dependency.
+Deliberately no Qt import (same rule as engine.py): sends and the listener
+run on plain threads and report through a queue the GUI drains on its timer.
+Standard library only, so the packaged exe gains no dependency.
 
 SECRETS
 -------
-The bot token and contacts live in %APPDATA%\\FD Studio\\alerts.json - outside
-the repo (cannot be committed) and outside the exe (cannot be shared with it).
+The bot token and the subscriber list live in %APPDATA%\\FD Studio\\alerts.json
+- outside the repo, so they cannot be committed. A shipped exe can carry a
+token (tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored);
+on first run it seeds the settings file from that. Such an exe contains the
+token: share it privately, never commit or publish it.
 """
 
 from __future__ import annotations
@@ -34,6 +51,7 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -42,11 +60,18 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = (Path(os.environ.get("APPDATA") or Path.home())
-               / "FD Studio" / "alerts.json")
+#: FD_STUDIO_ALERTS_FILE overrides the location - for tests, so they can
+#: never touch (or poll with) a real bot.
+CONFIG_PATH = Path(os.environ.get("FD_STUDIO_ALERTS_FILE") or
+                   (Path(os.environ.get("APPDATA") or Path.home())
+                    / "FD Studio" / "alerts.json"))
+
+#: Name of the token file build_exe.ps1 bundles into a shipped exe.
+BUNDLE_NAME = "alerts.bundle.json"
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 CALLMEBOT_CALL = "https://api.callmebot.com/start.php"
+CALLMEBOT_BOT = "@CallMeBot_txtbot"
 
 #: CallMeBot reads at most 256 characters.
 CALL_TEXT_MAX = 256
@@ -55,33 +80,40 @@ CALL_TEXT_MAX = 256
 #: Wi-Fi drop; three tries over ~7 s, then report the failure loudly.
 RETRY_DELAYS_S = (2.0, 5.0)
 HTTP_TIMEOUT_S = 10.0
+#: getUpdates long-poll. Below HTTP_TIMEOUT_S, so a quiet bot is not an error.
+POLL_TIMEOUT_S = 8
 
 _TEMPLATE = {
     "_help": [
-        "FD Studio phone alerts. Fill this in, save, then press "
-        "'Send test to phones' on the User tab.",
+        "FD Studio phone alerts.",
         "wearer_name: how the alerts refer to the wearer, e.g. 'Grandma'.",
-        "telegram_bot_token: in Telegram, message @BotFather, send /newbot, "
-        "and paste the token it gives you.",
-        "telegram_chat_ids: leave empty. Each person (or a family group with "
-        "the bot added) sends any message to your bot first; 'Send test to "
-        "phones' then finds and fills these in.",
-        "callmebot_users: Telegram usernames to CALL, e.g. '@alice'. Each "
-        "person must first send /start to @CallMeBot_txtbot in Telegram.",
+        "telegram_bot_token: from @BotFather in Telegram (/newbot).",
+        "subscribers: filled in automatically when someone presses Start on "
+        "the bot, removed when they send /stop. No need to edit.",
+        "telegram_chat_ids / callmebot_users: optional extras added by hand.",
         "Free services, no guarantee. Alerts go out only while this laptop "
         "is on, online, and FD Studio is open.",
     ],
     "wearer_name": "",
     "telegram_bot_token": "",
+    "subscribers": [],
     "telegram_chat_ids": [],
     "callmebot_users": [],
 }
+
+
+def _template() -> dict:
+    """A fresh copy. dict(_TEMPLATE) would share its lists, and the first
+    subscriber appended would be added to the template itself."""
+    return json.loads(json.dumps(_TEMPLATE))
 
 
 @dataclass
 class AlertConfig:
     wearer_name: str = ""
     telegram_bot_token: str = ""
+    #: [{"chat_id", "name", "username" ("@x" or ""), "group": bool}]
+    subscribers: list[dict] = field(default_factory=list)
     telegram_chat_ids: list[str] = field(default_factory=list)
     callmebot_users: list[str] = field(default_factory=list)
 
@@ -90,9 +122,20 @@ class AlertConfig:
         return self.wearer_name.strip() or "the wearer"
 
     @property
+    def message_targets(self) -> list[str]:
+        ids = [s["chat_id"] for s in self.subscribers] + self.telegram_chat_ids
+        return list(dict.fromkeys(ids))
+
+    @property
+    def call_targets(self) -> list[str]:
+        users = [s["username"] for s in self.subscribers
+                 if s.get("username") and not s.get("group")]
+        return list(dict.fromkeys(users + self.callmebot_users))
+
+    @property
     def configured(self) -> bool:
-        return bool(self.telegram_bot_token and self.telegram_chat_ids) \
-            or bool(self.callmebot_users)
+        return bool(self.telegram_bot_token and self.message_targets) \
+            or bool(self.call_targets)
 
 
 def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
@@ -105,9 +148,15 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
         return AlertConfig(), f"cannot read {path.name}: {exc}"
     if not isinstance(raw, dict):
         return AlertConfig(), f"{path.name} is not a JSON object"
+    subs = [s for s in raw.get("subscribers", [])
+            if isinstance(s, dict) and str(s.get("chat_id", "")).strip()]
     cfg = AlertConfig(
         wearer_name=str(raw.get("wearer_name", "")),
         telegram_bot_token=str(raw.get("telegram_bot_token", "")).strip(),
+        subscribers=[{"chat_id": str(s["chat_id"]).strip(),
+                      "name": str(s.get("name", "")),
+                      "username": str(s.get("username", "")),
+                      "group": bool(s.get("group", False))} for s in subs],
         telegram_chat_ids=[str(c).strip() for c in
                            raw.get("telegram_chat_ids", []) if str(c).strip()],
         callmebot_users=[str(u).strip() for u in
@@ -116,19 +165,55 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
     return cfg, ""
 
 
+def _write_json(path: Path, raw: dict) -> None:
+    """Write via a temp file and rename: a crash mid-write must not leave a
+    half-written settings file that loses every subscriber."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _bundled_defaults() -> dict:
+    """Token and wearer name baked into a shipped exe, or {}."""
+    base = getattr(sys, "_MEIPASS", None)
+    if not getattr(sys, "frozen", False) or not base:
+        return {}
+    try:
+        raw = json.loads((Path(base) / BUNDLE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def seed_from_bundle(path: Path = CONFIG_PATH) -> bool:
+    """First run of a shipped exe: create the settings from the bundled
+    token, so the person receiving it never opens a settings file. Only
+    fills a missing token; never touches subscribers or an existing one."""
+    bundle = _bundled_defaults()
+    token = str(bundle.get("telegram_bot_token", "")).strip()
+    if not token:
+        return False
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() \
+            else _template()
+    except (OSError, ValueError):
+        return False            # a broken file is reported by load_config
+    if str(raw.get("telegram_bot_token", "")).strip():
+        return False
+    raw["telegram_bot_token"] = token
+    if not str(raw.get("wearer_name", "")).strip():
+        raw["wearer_name"] = str(bundle.get("wearer_name", ""))
+    _write_json(path, raw)
+    return True
+
+
 def ensure_config_file(path: Path = CONFIG_PATH) -> Path:
     """Create the template if missing, so 'open settings' has something
     to open. Never overwrites an existing file."""
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(_TEMPLATE, indent=2), encoding="utf-8")
+        _write_json(path, _template())
     return path
-
-
-def _save_chat_ids(path: Path, chat_ids: list[str]) -> None:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    raw["telegram_chat_ids"] = chat_ids
-    path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
 
 
 def _visible_text(html: bytes) -> str:
@@ -161,7 +246,8 @@ def _http(url: str, data: dict | None = None) -> bytes:
 
 
 class Notifier:
-    """Fire-and-report phone alerts. Safe to call from the GUI thread.
+    """Fire-and-report phone alerts, plus the bot's subscription inbox.
+    Safe to call from the GUI thread.
 
     results carries ("log", text) and ("done", tag, ok, failures) tuples:
     ok is the number of deliveries the services accepted, failures a list of
@@ -173,7 +259,11 @@ class Notifier:
         self.config_path = config_path
         self.results: queue.Queue = queue.Queue()
         self._http = http
-        # ONE worker, in order. With a thread per send, "alert dismissed"
+        #: "@name" of the bot, learnt by the inbox; for the share link.
+        self.bot_username = ""
+        # Serialises edits to the settings file (inbox vs. anything else).
+        self._file_lock = threading.Lock()
+        # ONE sender, in order. With a thread per send, "alert dismissed"
         # could reach a phone before the alert it refers to.
         self._jobs: queue.Queue = queue.Queue()
         threading.Thread(target=self._worker, daemon=True,
@@ -190,20 +280,32 @@ class Notifier:
     def config(self) -> tuple[AlertConfig, str]:
         return load_config(self.config_path)
 
+    @property
+    def share_link(self) -> str:
+        return f"t.me/{self.bot_username.lstrip('@')}" if self.bot_username else ""
+
     def describe(self) -> str:
-        """One line for the screen: what will happen on an alert."""
+        """For the screen: who gets alerted, and how to add people."""
         cfg, problem = self.config()
         if problem:
             return f"Phone alerts: settings file broken — {problem}"
-        if not cfg.configured:
+        if not cfg.telegram_bot_token and not cfg.configured:
             return "Phone alerts: not set up — nobody is contacted"
-        parts = []
-        if cfg.telegram_bot_token and cfg.telegram_chat_ids:
-            parts.append(f"Telegram message to {len(cfg.telegram_chat_ids)} "
-                         f"chat{'s' if len(cfg.telegram_chat_ids) != 1 else ''}")
-        if cfg.callmebot_users:
-            parts.append("call " + ", ".join(cfg.callmebot_users))
-        return "Phone alerts: " + " + ".join(parts)
+        share = (f"\nTo subscribe, open {self.share_link} in Telegram and "
+                 f"press Start." if self.share_link else "")
+        if not cfg.configured:
+            return "Phone alerts: nobody has subscribed yet." + share
+        names = [s["name"] or s["username"] or s["chat_id"]
+                 for s in cfg.subscribers]
+        shown = ", ".join(names[:3]) + (f" +{len(names) - 3}"
+                                         if len(names) > 3 else "")
+        n = len(cfg.message_targets)
+        line = f"Phone alerts: {n} on Telegram"
+        if shown:
+            line += f" ({shown})"
+        if cfg.call_targets:
+            line += f" · calls to {len(cfg.call_targets)}"
+        return line + share
 
     # ── sending ──────────────────────────────────────────────────────────────
     def send(self, tag: str, text: str, call_text: str | None = None,
@@ -220,8 +322,7 @@ class Notifier:
         return True
 
     def send_test(self) -> None:
-        """Queue a test message and call. Finds chat ids first if the file
-        has a bot token but none yet. Reports as tag "test"."""
+        """Queue a test message and call to everyone. Reports as "test"."""
         self._jobs.put(self._test_job)
 
     def _test_job(self) -> None:
@@ -229,25 +330,12 @@ class Notifier:
         if problem:
             self.results.put(("done", "test", 0, [problem]))
             return
-        if cfg.telegram_bot_token and not cfg.telegram_chat_ids:
-            try:
-                found = self.discover_chats()
-            except RuntimeError as exc:
-                self.results.put(("done", "test", 0, [f"Telegram: {exc}"]))
-                return
-            if not found:
-                self.results.put(("done", "test", 0, [
-                    "Telegram: nobody has messaged the bot yet — send it any "
-                    "message from each phone (or add it to the family group), "
-                    "then press Send test again"]))
-                return
-            for chat_id, title in found:
-                self.results.put(("log", f"phone alerts: added Telegram chat "
-                                         f"'{title}' ({chat_id})"))
-            cfg, _ = self.config()
         if not cfg.configured:
-            self.results.put(("done", "test", 0, [
-                "not set up — press 'Phone alert settings' and fill in the file"]))
+            how = (f"send people the link {self.share_link} and ask them to "
+                   f"press Start" if self.share_link else
+                   "press 'Phone alert settings' and add the bot token")
+            self.results.put(("done", "test", 0,
+                              [f"nobody to alert yet — {how}"]))
             return
         self._send_all(cfg, "test",
                        f"🧪 Test from FD Studio: phone alerts for {cfg.name} "
@@ -259,11 +347,11 @@ class Notifier:
                   call_text: str | None, silent: bool) -> None:
         jobs = []
         if cfg.telegram_bot_token:
-            for chat in cfg.telegram_chat_ids:
-                jobs.append((f"Telegram {chat}",
+            for chat in cfg.message_targets:
+                jobs.append((f"Telegram {self._who(cfg, chat)}",
                              lambda c=chat: self._telegram(cfg, c, text, silent)))
         if call_text:
-            for user in cfg.callmebot_users:
+            for user in cfg.call_targets:
                 jobs.append((f"call {user}",
                              lambda u=user: self._call(u, call_text)))
 
@@ -277,7 +365,31 @@ class Notifier:
             else:
                 failures.append(f"{who}: {err}")
                 self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
+                if who.startswith("call ") and err.startswith("CallMeBot refused"):
+                    self._tell_call_blocked(cfg, who[5:])
         self.results.put(("done", tag, ok, failures))
+
+    @staticmethod
+    def _who(cfg: AlertConfig, chat_id: str) -> str:
+        for s in cfg.subscribers:
+            if s["chat_id"] == chat_id:
+                return s["name"] or s["username"] or chat_id
+        return chat_id
+
+    def _tell_call_blocked(self, cfg: AlertConfig, username: str) -> None:
+        """A refused call is invisible to the person it was meant for -
+        tell them, on the channel that does reach them."""
+        for s in cfg.subscribers:
+            if s.get("username") == username and not s.get("group"):
+                try:
+                    self._telegram(cfg, s["chat_id"],
+                                   f"📞 FD Studio tried to CALL you about "
+                                   f"{cfg.name}, but CallMeBot is not allowed "
+                                   f"to call you yet. Open {CALLMEBOT_BOT} in "
+                                   f"Telegram and press Start (one time).",
+                                   silent=False)
+                except RuntimeError:
+                    pass
 
     def _with_retries(self, job) -> tuple[str | None, str]:
         """(error or None, detail from the service)."""
@@ -321,32 +433,186 @@ class Notifier:
         # text goes into the log for a human to read.
         if "not authorized" in text.lower() or "is not received" in text.lower():
             raise RuntimeError("CallMeBot refused — this person must first "
-                               "send /start to @CallMeBot_txtbot in Telegram")
+                               f"send /start to {CALLMEBOT_BOT} in Telegram")
         return f"CallMeBot: {text[-160:]}" if text else ""
 
-    # ── setup helper ─────────────────────────────────────────────────────────
-    def discover_chats(self) -> list[tuple[str, str]]:
-        """Chats that have messaged the bot, as (chat_id, title).
+    # ── subscriptions: the bot's inbox ───────────────────────────────────────
+    def start_listening(self) -> None:
+        """Watch the bot for /start and /stop, for the life of the process."""
+        threading.Thread(target=self._listen, daemon=True,
+                         name="telegram-inbox").start()
 
-        Fills telegram_chat_ids when it is empty, so nobody has to find a
-        numeric id by hand. Raises RuntimeError with the reason on failure.
-        """
-        cfg, problem = self.config()
-        if problem:
-            raise RuntimeError(problem)
-        if not cfg.telegram_bot_token:
-            raise RuntimeError("no telegram_bot_token in the settings file")
-        raw = self._http(TELEGRAM_API.format(token=cfg.telegram_bot_token,
-                                             method="getUpdates"))
-        found: dict[str, str] = {}
-        for upd in json.loads(raw).get("result", []):
-            msg = upd.get("message") or upd.get("my_chat_member") or {}
-            chat = msg.get("chat") or {}
-            if "id" in chat:
-                title = (chat.get("title") or " ".join(
-                    filter(None, [chat.get("first_name"), chat.get("last_name")]))
-                    or chat.get("username") or "?")
-                found[str(chat["id"])] = title
-        if found and not cfg.telegram_chat_ids:
-            _save_chat_ids(self.config_path, list(found))
-        return list(found.items())
+    def _listen(self) -> None:
+        offset: int | None = None
+        last_err = ""
+        token_seen = ""
+        while True:
+            cfg, problem = self.config()
+            token = cfg.telegram_bot_token
+            if problem or not token:
+                time.sleep(5.0)          # set up later; pick it up then
+                continue
+            api = lambda m: TELEGRAM_API.format(token=token, method=m)  # noqa: E731
+            if token != token_seen:
+                try:
+                    me = json.loads(self._http(api("getMe"))).get("result", {})
+                    self.bot_username = "@" + me.get("username", "")
+                    token_seen = token
+                    self.results.put(("log", f"phone alerts: listening to "
+                                             f"{self.bot_username}"))
+                except (RuntimeError, ValueError) as exc:
+                    self._inbox_error(str(exc), last_err)
+                    last_err = str(exc)
+                    time.sleep(30.0)
+                    continue
+            t0 = time.monotonic()
+            params = {"timeout": str(POLL_TIMEOUT_S),
+                      "allowed_updates": '["message","my_chat_member"]'}
+            if offset is not None:
+                params["offset"] = str(offset)
+            try:
+                updates = json.loads(self._http(api("getUpdates"), params)
+                                     ).get("result", [])
+            except (RuntimeError, ValueError) as exc:
+                msg = str(exc)
+                self._inbox_error(msg, last_err)
+                last_err = msg
+                # 409: another program is reading this bot's updates.
+                time.sleep(30.0 if msg.startswith(("HTTP 409", "HTTP 401"))
+                           else 10.0)
+                continue
+            last_err = ""
+            for upd in updates:
+                offset = int(upd.get("update_id", 0)) + 1
+                try:
+                    self._handle_update(token, upd)
+                except Exception as exc:  # noqa: BLE001 - one bad update only
+                    self.results.put(("log", f"phone alerts: could not handle "
+                                             f"a Telegram update ({exc!r})"))
+            if not updates and time.monotonic() - t0 < 1.0:
+                time.sleep(1.0)          # a server answering instantly: no spin
+
+    def _inbox_error(self, msg: str, last: str) -> None:
+        if msg == last:
+            return                       # once per distinct error, not per poll
+        hint = (" — another program (or another FD Studio) is using this "
+                "bot; only one may" if msg.startswith("HTTP 409") else "")
+        self.results.put(("log", f"phone alerts: Telegram inbox error: "
+                                 f"{msg}{hint}"))
+
+    def _handle_update(self, token: str, upd: dict) -> None:
+        if "my_chat_member" in upd:
+            m = upd["my_chat_member"]
+            chat = m.get("chat") or {}
+            status = (m.get("new_chat_member") or {}).get("status", "")
+            if status in ("kicked", "left"):
+                # Blocked the bot, or removed it from the group.
+                self._unsubscribe(token, chat, reply=False)
+            elif chat.get("type") in ("group", "supergroup") \
+                    and status in ("member", "administrator"):
+                self._subscribe(token, chat, explicit=True)
+            return
+        msg = upd.get("message") or {}
+        chat = msg.get("chat") or {}
+        if "id" not in chat:
+            return
+        text = (msg.get("text") or "").strip().lower()
+        if text.startswith("/stop"):
+            self._unsubscribe(token, chat, reply=True)
+        else:
+            self._subscribe(token, chat, explicit=text.startswith("/start"))
+
+    def _reply(self, token: str, chat_id: str, text: str,
+               silent: bool = False) -> None:
+        try:
+            self._http(TELEGRAM_API.format(token=token, method="sendMessage"),
+                       {"chat_id": chat_id, "text": text,
+                        "disable_notification": "true" if silent else "false"})
+        except RuntimeError as exc:
+            self.results.put(("log", f"phone alerts: could not reply to "
+                                     f"{chat_id}: {exc}"))
+
+    def _subscribe(self, token: str, chat: dict, explicit: bool) -> None:
+        group = chat.get("type") in ("group", "supergroup", "channel")
+        entry = {
+            "chat_id": str(chat["id"]),
+            "name": (chat.get("title") or " ".join(filter(None, [
+                chat.get("first_name"), chat.get("last_name")]))
+                or chat.get("username") or "?"),
+            "username": ("@" + chat["username"]) if chat.get("username")
+            and not group else "",
+            "group": group,
+        }
+        with self._file_lock:
+            raw = self._raw_config()
+            subs = raw.setdefault("subscribers", [])
+            old = next((s for s in subs
+                        if str(s.get("chat_id")) == entry["chat_id"]), None)
+            if old is None:
+                subs.append(entry)
+            else:
+                old.update(entry)
+            _write_json(self.config_path, raw)
+            wearer = str(raw.get("wearer_name", "")).strip() or "the wearer"
+            others = [str(s["chat_id"]) for s in subs
+                      if str(s.get("chat_id")) != entry["chat_id"]]
+
+        if old is None:
+            self.results.put(("log", f"phone alerts: {entry['name']} "
+                                     f"subscribed"))
+            self._reply(token, entry["chat_id"], self._welcome(entry, wearer))
+            # Visible, not hidden: anyone can find a bot and press Start.
+            for other in others:
+                self._reply(token, other, f"👤 {entry['name']} joined the "
+                            f"alert list for {wearer}.", silent=True)
+        elif explicit:
+            self._reply(token, entry["chat_id"],
+                        "✅ You're already on the alert list for "
+                        f"{wearer}.\n\n" + self._call_note(entry))
+
+    def _unsubscribe(self, token: str, chat: dict, reply: bool) -> None:
+        chat_id = str(chat.get("id", ""))
+        with self._file_lock:
+            raw = self._raw_config()
+            subs = raw.get("subscribers", [])
+            gone = [s for s in subs if str(s.get("chat_id")) == chat_id]
+            raw["subscribers"] = [s for s in subs
+                                  if str(s.get("chat_id")) != chat_id]
+            if gone:
+                _write_json(self.config_path, raw)
+            wearer = str(raw.get("wearer_name", "")).strip() or "the wearer"
+        if gone:
+            self.results.put(("log", f"phone alerts: {gone[0].get('name')} "
+                                     f"unsubscribed"))
+        if reply:
+            self._reply(token, chat_id, f"You've left the alert list for "
+                        f"{wearer}. Send /start to join again.")
+
+    def _raw_config(self) -> dict:
+        try:
+            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else _template()
+        except (OSError, ValueError):
+            return _template()
+
+    @staticmethod
+    def _call_note(entry: dict) -> str:
+        if entry["group"]:
+            return ("📞 For a phone CALL as well, each person messages this bot "
+                    f"privately and presses Start, then presses Start on "
+                    f"{CALLMEBOT_BOT}.")
+        if not entry["username"]:
+            return ("📞 Phone CALLS need a Telegram username, and you don't "
+                    "have one. Set it in Telegram → Settings → Username, then "
+                    f"send /start here again and press Start on "
+                    f"{CALLMEBOT_BOT}.")
+        return (f"📞 To also get a PHONE CALL: open {CALLMEBOT_BOT} and press "
+                f"Start (one time only).")
+
+    def _welcome(self, entry: dict, wearer: str) -> str:
+        who = "This group is" if entry["group"] else "You're"
+        return (f"✅ {who} now on the alert list for {wearer}.\n\n"
+                f"You'll get a message here if {wearer} may have fallen and "
+                f"doesn't respond within 30 seconds, or presses the SOS "
+                f"button.\n\n{self._call_note(entry)}\n\n"
+                f"Send /stop to leave the list.")

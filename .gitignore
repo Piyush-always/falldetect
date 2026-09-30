@@ -18,3 +18,8 @@ data/sisfall/
 
 # Working copy extracted from an archived release zip by the OTA tooling.
 firmware/*.extracted.bin
+
+# Telegram bot token for shipped exes, and the exes built with it
+# (tools/build_exe.ps1). They hold a secret: never commit them.
+alerts.bundle.json
+release/

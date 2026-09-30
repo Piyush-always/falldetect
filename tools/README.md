@@ -53,28 +53,43 @@ and neither exists in useful quantity. See `doc/PROJECT_OUTLINE.md` §5.3.
 
 ### Phone alerts
 
-When a possible fall gets no response for 30 s, FD Studio sends a Telegram
-message to the family and places a Telegram voice call that reads the alert
-aloud. Dismissing the alert afterwards sends an "all clear" message (no call).
+When a possible fall gets no response for 30 s, or SOS is pressed, FD Studio
+sends a Telegram message to everyone subscribed to the bot and places a
+Telegram voice call that reads the alert aloud. Dismissing it afterwards sends
+an "all clear" message (no call).
 
-Setup, once (User tab):
+**Subscribing** — each family member, on their phone:
 
-1. **Phone alert settings** opens `%APPDATA%\FD Studio\alerts.json` in Notepad.
-   It lives there, not in the repo or next to the exe, so the bot token can
-   neither be committed nor shared with the exe.
-2. In Telegram, message **@BotFather** → `/newbot` → paste the token into
-   `telegram_bot_token`. Set `wearer_name`.
-3. From each phone, send any message to the new bot — or add the bot to a
-   family group and post there.
-4. For the voice call: each person sends `/start` to **@CallMeBot_txtbot**,
-   then add their `@username` to `callmebot_users`.
-5. **Send test to phones.** It fills in the chat ids by itself, then sends a
-   test message and call. The result shows under the button and in the Log.
+1. Open the bot's link (shown on the User tab, e.g. `t.me/<bot>`) → **Start**.
+   The bot replies "You're now on the alert list". `/stop` leaves.
+   Adding the bot to a family group subscribes the whole group.
+2. For the phone **call** as well: open **@CallMeBot_txtbot** → **Start**
+   (once). Calls need a Telegram username (Settings → Username); the bot's
+   welcome message says so if one is missing.
+
+FD Studio picks up /start and /stop only while it is running, and every new
+subscriber is announced (silently) to the others — bots are searchable, so a
+stranger subscribing is visible rather than hidden.
+
+**Shipping the exe with a bot** — put the token in `alerts.bundle.json` at
+the repo root (git-ignored), then build:
+
+```json
+{ "telegram_bot_token": "123:ABC...", "wearer_name": "Grandma" }
+```
+
+`.\tools\build_exe.ps1` bundles it and writes `release\FD Studio.exe`
+(git-ignored). On its first run that exe sets up phone alerts by itself.
+**That exe contains the token — share it privately, never commit it.**
+Settings, including the subscriber list, live in
+`%APPDATA%\FD Studio\alerts.json` on the machine running it.
 
 Limits — say these out loud to whoever relies on it:
 
 - Sent **from the laptop**. Laptop asleep, offline, or FD Studio closed means
   nothing is sent. The alert screen says "alert NOT sent" when a send fails.
+- **One running FD Studio per bot.** Telegram hands each update to one
+  listener; two would split the subscribers. Use one bot per wearer.
 - Both services are free. The Telegram Bot API is official; CallMeBot is a
   third-party service for personal use with no guarantee, and on iPhone the
   call rings but its audio may not play (their documented Telegram bug).
