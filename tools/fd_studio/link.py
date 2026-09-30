@@ -34,6 +34,12 @@ from .engine import Engine
 
 BOARD_VIDPID = "VID:PID=2FE3:0100"
 
+#: Connected this long with bytes arriving but no $D sample: the pendant's
+#: motion sensor is not sampling. The button, battery and status lines are
+#: sent by a different loop and keep working, so the link LOOKS fine - and
+#: the User tab used to say "Connecting..." for ever (seen 2026-09-30).
+SILENT_SENSOR_S = 8.0
+
 
 def list_ports() -> list[tuple[str, str, bool]]:
     """Ports as (device, description, is_board), best candidate first.
@@ -85,6 +91,11 @@ class LinkBase:
         # Staleness is judged on samples; last_rx only says the link is up.
         self.last_rx = time.time()
         self.last_sample_rx = time.time()
+        # Bytes of ANY kind, and when the link was opened. Together they tell
+        # "still connecting" (nothing yet) from "connected, but the motion
+        # sensor sends nothing" (button/battery/status arrive, no $D).
+        self.bytes_rx = 0
+        self.opened = time.time()
         self.rate = 0.0
         self.identity = ""
         # Battery, from the device's $V line. None until first seen.
@@ -128,6 +139,7 @@ class LinkBase:
         if not data:
             return
         self.last_rx = time.time()
+        self.bytes_rx += len(data)
         # CRLF, plus USB packet boundaries can leave a bare CR.
         self._buf += data.replace(b"\r", b"\n")
         while b"\n" in self._buf:
@@ -253,6 +265,10 @@ class LinkBase:
                 "stale": stale,
                 "link_stale": now - self.last_rx,
                 "rec_n": self._csv_n if self._csv else 0,
+                # Connected and talking, but not one motion sample after
+                # SILENT_SENSOR_S: the pendant's sensor is not sampling.
+                "sensor_silent": (self.samples == 0 and self.bytes_rx > 0
+                                  and now - self.opened > SILENT_SENSOR_S),
             }
 
     def trace_copy(self) -> list:

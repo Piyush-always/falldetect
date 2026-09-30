@@ -1268,7 +1268,15 @@ class MainWindow(QMainWindow):
             self._set_conn_state("Not connected", "text_3")
         else:
             st = link.stats()
-            if st["samples"] == 0:
+            if st.get("sensor_silent"):
+                self._set_conn_state("Connected, sensor silent", "danger")
+                if not getattr(link, "_silent_logged", False):
+                    link._silent_logged = True
+                    self.say("device connected, but its motion sensor sends "
+                             "no samples (button/battery/status still "
+                             "arrive) — switch the pendant off and on, then "
+                             "Connect again")
+            elif st["samples"] == 0:
                 self._set_conn_state("Connected, no data", "warning")
             elif st["stale"] > 3.0 and st["link_stale"] <= 3.0:
                 self._set_conn_state(f"Sensor stopped {int(st['stale'])}s",
@@ -1294,6 +1302,10 @@ class MainWindow(QMainWindow):
         elif falling:
             self.plate.set_state("FALL DETECTED", "check on the wearer",
                                  "danger", True)
+        elif stats and stats.get("sensor_silent"):
+            self.plate.set_state("SENSOR NOT SENDING",
+                                 "connected, status arrives, 0 motion samples "
+                                 "— power-cycle the pendant", "danger", True)
         elif stats and stats["samples"] == 0:
             self.plate.set_state("NO DATA",
                                  "nothing arriving — wrong port, or firmware "
@@ -1371,6 +1383,10 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setText(
                     f"no samples for {int(s['stale'])}s, status still "
                     f"arriving — power-cycle the device")
+            elif s.get("sensor_silent"):
+                self.lbl_status.setText(
+                    "connected, but 0 motion samples — power-cycle the "
+                    "pendant, then Connect again")
             elif s["stale"] > 3.0:
                 self.lbl_status.setText(
                     f"NO DATA for {int(s['stale'])}s — reflashed? reconnect")
