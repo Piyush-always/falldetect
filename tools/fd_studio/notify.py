@@ -1,36 +1,41 @@
 """
-Phone alerts: a Telegram message, and a Telegram voice call via CallMeBot.
+Phone alerts: a Telegram message, plus a loud ntfy push.
 
 WHO GETS THEM
 -------------
-Anyone who opens the bot in Telegram and presses Start. FD Studio listens to
+Telegram: anyone who opens the bot and presses Start. FD Studio listens to
 the bot while it runs: /start (or any first message) adds that chat to the
 alert list and replies with a welcome, /stop removes it. Adding the bot to a
-family group subscribes the whole group. Nobody edits a file by hand.
+family group subscribes the group. Nobody edits a file by hand.
+
+ntfy: anyone subscribed to the topic in the free ntfy app. The bot's welcome
+message gives each new subscriber the topic and how to add it.
 
 Anyone who finds the bot can subscribe - bot names are searchable - so every
-new subscriber is announced (silently) to everyone already on the list. A
-stranger joining is then seen, not hidden.
+new Telegram subscriber is announced (silently) to everyone already on the
+list. A stranger joining is then seen, not hidden. The ntfy topic is a secret
+in itself: anyone who has it can read the alerts, so it is only handed out to
+people who subscribed to the bot.
 
-WHY THESE TWO SERVICES
-----------------------
-Free, instant, and no business verification. The Telegram Bot API is official
-and reliable, but a message is only a notification and can be muted. A bot
-cannot place calls, so the CallMeBot call is what RINGS the phone and reads
-the alert aloud - a free third-party service for personal use with no
-guarantee. It needs each person to press Start on @CallMeBot_txtbot once and
-to have a Telegram username; the welcome message says so, and a person whose
-call is refused gets told again. The message is the channel of record; the
-call is the loud one; neither is trusted alone.
+WHY THESE TWO
+-------------
+Free, instant, no business verification. The Telegram Bot API is official and
+reliable, but a message is a normal notification that can be muted - it is
+the channel of record. ntfy's urgent priority is the loud one: long
+vibration bursts and a pop-over, and on Android it can be set to override Do
+Not Disturb. It replaced CallMeBot voice calls (2026-09-30): those broke when
+another user's spam report blocked the shared caller, whose fix then asked
+for 950 Telegram Stars per message.
 
 WHAT THIS IS NOT
 ----------------
 Sent from the laptop, over the laptop's internet. Laptop asleep, offline, or
-FD Studio closed means nothing is sent - and new subscribers are not picked
-up either. Every send reports success or failure back to the screen; a
-failure is shown as "NOT sent", never swallowed. Only ONE running FD Studio
-may use a bot: Telegram hands each update to one listener, so two would split
-the subscribers between them.
+FD Studio closed means nothing is sent - and new Telegram subscribers are not
+picked up either. Every send reports success or failure back to the screen; a
+failure is shown as "NOT sent", never swallowed. "Reached" means the service
+accepted it: ntfy cannot say how many phones are subscribed to a topic.
+Only ONE running FD Studio may use a bot: Telegram hands each update to one
+listener, so two would split the subscribers between them.
 
 Deliberately no Qt import (same rule as engine.py): sends and the listener
 run on plain threads and report through a queue the GUI drains on its timer.
@@ -38,12 +43,12 @@ Standard library only, so the packaged exe gains no dependency.
 
 SECRETS
 -------
-The bot token and the subscriber list live in %USERPROFILE%\\.fd_studio\\
-alerts.json - outside the repo, so they cannot be committed (and not in
-AppData: see CONFIG_PATH). A shipped exe can carry a
-token (tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored);
-on first run it seeds the settings file from that. Such an exe contains the
-token: share it privately, never commit or publish it.
+The bot token, the ntfy topic and the subscriber list live in
+%USERPROFILE%\\.fd_studio\\alerts.json - outside the repo, so they cannot be
+committed (and not in AppData: see CONFIG_PATH). A shipped exe can carry them
+(tools/build_exe.ps1 bundles alerts.bundle.json, which is git-ignored); on
+first run it seeds the settings file from that. Such an exe contains the
+secrets: share it privately, never commit or publish it.
 """
 
 from __future__ import annotations
@@ -51,7 +56,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import sys
 import threading
 import time
@@ -73,15 +77,15 @@ from pathlib import Path
 CONFIG_PATH = Path(os.environ.get("FD_STUDIO_ALERTS_FILE") or
                    (Path.home() / ".fd_studio" / "alerts.json"))
 
-#: Name of the token file build_exe.ps1 bundles into a shipped exe.
+#: Name of the settings file build_exe.ps1 bundles into a shipped exe.
 BUNDLE_NAME = "alerts.bundle.json"
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
-CALLMEBOT_CALL = "https://api.callmebot.com/start.php"
-CALLMEBOT_BOT = "@CallMeBot_txtbot"
+NTFY_DEFAULT_SERVER = "https://ntfy.sh"
 
-#: CallMeBot reads at most 256 characters.
-CALL_TEXT_MAX = 256
+#: ntfy priorities: 5 = urgent (long vibration bursts, pop-over), 3 = default,
+#: 2 = low (no sound or vibration).
+NTFY_URGENT, NTFY_NORMAL, NTFY_QUIET = 5, 3, 2
 
 #: Waits between attempts. A fall alert is worth retrying through a brief
 #: Wi-Fi drop; three tries over ~7 s, then report the failure loudly.
@@ -95,18 +99,25 @@ _TEMPLATE = {
         "FD Studio phone alerts.",
         "wearer_name: how the alerts refer to the wearer, e.g. 'Grandma'.",
         "telegram_bot_token: from @BotFather in Telegram (/newbot).",
+        "ntfy_topic: a long random name, e.g. fd-sos-3f9a1c7e2b6d4a80. Keep it "
+        "private: anyone who has it can read the alerts.",
         "subscribers: filled in automatically when someone presses Start on "
         "the bot, removed when they send /stop. No need to edit.",
-        "telegram_chat_ids / callmebot_users: optional extras added by hand.",
+        "telegram_chat_ids: optional extra Telegram chats, added by hand.",
         "Free services, no guarantee. Alerts go out only while this laptop "
         "is on, online, and FD Studio is open.",
     ],
     "wearer_name": "",
     "telegram_bot_token": "",
+    "ntfy_topic": "",
+    "ntfy_server": NTFY_DEFAULT_SERVER,
     "subscribers": [],
     "telegram_chat_ids": [],
-    "callmebot_users": [],
 }
+
+#: Settings a shipped exe may carry in its bundle, filled in only if missing.
+_BUNDLE_FIELDS = ("telegram_bot_token", "wearer_name", "ntfy_topic",
+                  "ntfy_server")
 
 
 def _template() -> dict:
@@ -119,10 +130,11 @@ def _template() -> dict:
 class AlertConfig:
     wearer_name: str = ""
     telegram_bot_token: str = ""
+    ntfy_topic: str = ""
+    ntfy_server: str = NTFY_DEFAULT_SERVER
     #: [{"chat_id", "name", "username" ("@x" or ""), "group": bool}]
     subscribers: list[dict] = field(default_factory=list)
     telegram_chat_ids: list[str] = field(default_factory=list)
-    callmebot_users: list[str] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -134,15 +146,9 @@ class AlertConfig:
         return list(dict.fromkeys(ids))
 
     @property
-    def call_targets(self) -> list[str]:
-        users = [s["username"] for s in self.subscribers
-                 if s.get("username") and not s.get("group")]
-        return list(dict.fromkeys(users + self.callmebot_users))
-
-    @property
     def configured(self) -> bool:
         return bool(self.telegram_bot_token and self.message_targets) \
-            or bool(self.call_targets)
+            or bool(self.ntfy_topic)
 
 
 def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
@@ -160,14 +166,15 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
     cfg = AlertConfig(
         wearer_name=str(raw.get("wearer_name", "")),
         telegram_bot_token=str(raw.get("telegram_bot_token", "")).strip(),
+        ntfy_topic=str(raw.get("ntfy_topic", "")).strip(),
+        ntfy_server=(str(raw.get("ntfy_server", "")).strip().rstrip("/")
+                     or NTFY_DEFAULT_SERVER),
         subscribers=[{"chat_id": str(s["chat_id"]).strip(),
                       "name": str(s.get("name", "")),
                       "username": str(s.get("username", "")),
                       "group": bool(s.get("group", False))} for s in subs],
         telegram_chat_ids=[str(c).strip() for c in
                            raw.get("telegram_chat_ids", []) if str(c).strip()],
-        callmebot_users=[str(u).strip() for u in
-                         raw.get("callmebot_users", []) if str(u).strip()],
     )
     return cfg, ""
 
@@ -182,7 +189,7 @@ def _write_json(path: Path, raw: dict) -> None:
 
 
 def _bundled_defaults() -> dict:
-    """Token and wearer name baked into a shipped exe, or {}."""
+    """Settings baked into a shipped exe, or {}."""
     base = getattr(sys, "_MEIPASS", None)
     if not getattr(sys, "frozen", False) or not base:
         return {}
@@ -194,25 +201,29 @@ def _bundled_defaults() -> dict:
 
 
 def seed_from_bundle(path: Path = CONFIG_PATH) -> bool:
-    """First run of a shipped exe: create the settings from the bundled
-    token, so the person receiving it never opens a settings file. Only
-    fills a missing token; never touches subscribers or an existing one."""
+    """A shipped exe: fill any MISSING setting from the bundle, so the person
+    receiving it never opens a settings file. Never overwrites a value that
+    is already set, and never touches subscribers."""
     bundle = _bundled_defaults()
-    token = str(bundle.get("telegram_bot_token", "")).strip()
-    if not token:
+    if not bundle:
         return False
     try:
         raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() \
             else _template()
     except (OSError, ValueError):
         return False            # a broken file is reported by load_config
-    if str(raw.get("telegram_bot_token", "")).strip():
-        return False
-    raw["telegram_bot_token"] = token
-    if not str(raw.get("wearer_name", "")).strip():
-        raw["wearer_name"] = str(bundle.get("wearer_name", ""))
-    _write_json(path, raw)
-    return True
+    changed = False
+    for key in _BUNDLE_FIELDS:
+        value = str(bundle.get(key, "")).strip()
+        current = str(raw.get(key, "")).strip()
+        if value and (not current or (key == "ntfy_server"
+                                      and current == NTFY_DEFAULT_SERVER
+                                      and value != current)):
+            raw[key] = value
+            changed = True
+    if changed:
+        _write_json(path, raw)
+    return changed
 
 
 def ensure_config_file(path: Path = CONFIG_PATH) -> Path:
@@ -223,27 +234,27 @@ def ensure_config_file(path: Path = CONFIG_PATH) -> Path:
     return path
 
 
-def _visible_text(html: bytes) -> str:
-    """The words on an HTML page, without tags or scripts."""
-    s = html.decode("utf-8", "replace")
-    s = re.sub(r"(?is)<(script|style).*?</\1>", " ", s)
-    s = re.sub(r"(?s)<[^>]+>", " ", s)
-    return " ".join(s.split())
-
-
-def _http(url: str, data: dict | None = None) -> bytes:
-    """GET (data None) or form POST. Raises RuntimeError with the service's
-    own error text, because 'HTTP 400' alone does not say what to fix."""
-    body = urllib.parse.urlencode(data).encode() if data is not None else None
-    req = urllib.request.Request(url, data=body,
-                                 headers={"User-Agent": "FD-Studio"})
+def _http(url: str, data: dict | None = None,
+          json_body: dict | None = None) -> bytes:
+    """GET (no body), form POST (data) or JSON POST (json_body). Raises
+    RuntimeError with the service's own error text, because 'HTTP 400' alone
+    does not say what to fix."""
+    headers = {"User-Agent": "FD-Studio"}
+    body = None
+    if json_body is not None:
+        body = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    elif data is not None:
+        body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:300].decode("utf-8", "replace")
         try:
-            detail = json.loads(detail).get("description", detail)
+            j = json.loads(detail)
+            detail = j.get("description") or j.get("error") or detail
         except ValueError:
             pass
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
@@ -252,14 +263,18 @@ def _http(url: str, data: dict | None = None) -> bytes:
         raise RuntimeError(f"no connection ({reason})") from None
 
 
+def ntfy_host(cfg: AlertConfig) -> str:
+    return cfg.ntfy_server.split("://", 1)[-1]
+
+
 class Notifier:
     """Fire-and-report phone alerts, plus the bot's subscription inbox.
     Safe to call from the GUI thread.
 
     results carries ("log", text) and ("done", tag, ok, failures) tuples:
     ok is the number of deliveries the services accepted, failures a list of
-    "who: why" strings. "Accepted" is all that can be known - a call can
-    ring unanswered, a message can sit unread.
+    "who: why" strings. "Accepted" is all that can be known - a message can
+    sit unread, and ntfy cannot say who is subscribed.
     """
 
     def __init__(self, config_path: Path = CONFIG_PATH, http=_http) -> None:
@@ -298,38 +313,43 @@ class Notifier:
             return f"Phone alerts: settings file broken — {problem}"
         if not cfg.telegram_bot_token and not cfg.configured:
             return "Phone alerts: not set up — nobody is contacted"
-        share = (f"\nTo subscribe, open {self.share_link} in Telegram and "
-                 f"press Start." if self.share_link else "")
-        if not cfg.configured:
-            return "Phone alerts: nobody has subscribed yet." + share
-        names = [s["name"] or s["username"] or s["chat_id"]
-                 for s in cfg.subscribers]
-        shown = ", ".join(names[:3]) + (f" +{len(names) - 3}"
-                                         if len(names) > 3 else "")
-        n = len(cfg.message_targets)
-        line = f"Phone alerts: {n} on Telegram"
-        if shown:
-            line += f" ({shown})"
-        if cfg.call_targets:
-            line += f" · calls to {len(cfg.call_targets)}"
-        return line + share
+        parts = []
+        if cfg.telegram_bot_token:
+            names = [s["name"] or s["username"] or s["chat_id"]
+                     for s in cfg.subscribers]
+            if cfg.message_targets:
+                shown = ", ".join(names[:3]) + (f" +{len(names) - 3}"
+                                                 if len(names) > 3 else "")
+                parts.append(f"{len(cfg.message_targets)} on Telegram"
+                             + (f" ({shown})" if shown else ""))
+            else:
+                parts.append("nobody on Telegram yet")
+        if cfg.ntfy_topic:
+            parts.append(f"loud alarm on ntfy topic {cfg.ntfy_topic}")
+        line = "Phone alerts: " + " · ".join(parts)
+        if self.share_link:
+            line += (f"\nTo subscribe: open {self.share_link} in Telegram and "
+                     f"press Start.")
+        return line
 
     # ── sending ──────────────────────────────────────────────────────────────
-    def send(self, tag: str, text: str, call_text: str | None = None,
+    def send(self, tag: str, title: str, body: str, urgent: bool = False,
              silent: bool = False) -> bool:
         """Start sending. False (and nothing sent) if not set up.
 
-        call_text None means message only - follow-ups and 'all OK' notices
-        must never ring someone's phone at 3am.
+        urgent: the ntfy push goes out at priority 5 (long vibration bursts).
+        silent: Telegram without a sound, ntfy at low priority - for notes
+        nobody should be woken for. Neither: a normal notification.
         """
         cfg, problem = self.config()
         if problem or not cfg.configured:
             return False
-        self._jobs.put(lambda: self._send_all(cfg, tag, text, call_text, silent))
+        self._jobs.put(lambda: self._send_all(cfg, tag, title, body,
+                                              urgent, silent))
         return True
 
     def send_test(self) -> None:
-        """Queue a test message and call to everyone. Reports as "test"."""
+        """Queue an urgent test to everyone. Reports as "test"."""
         self._jobs.put(self._test_job)
 
     def _test_job(self) -> None:
@@ -344,36 +364,34 @@ class Notifier:
             self.results.put(("done", "test", 0,
                               [f"nobody to alert yet — {how}"]))
             return
-        self._send_all(cfg, "test",
-                       f"🧪 Test from FD Studio: phone alerts for {cfg.name} "
-                       f"are working.",
-                       "This is a test from F D Studio. Phone alerts are working.",
-                       silent=False)
+        # Urgent on purpose: a test has to prove the LOUD alarm works.
+        self._send_all(cfg, "test", "🧪 Test from FD Studio",
+                       f"Phone alerts for {cfg.name} are working.",
+                       urgent=True, silent=False)
 
-    def _send_all(self, cfg: AlertConfig, tag: str, text: str,
-                  call_text: str | None, silent: bool) -> None:
+    def _send_all(self, cfg: AlertConfig, tag: str, title: str, body: str,
+                  urgent: bool, silent: bool) -> None:
         jobs = []
         if cfg.telegram_bot_token:
             for chat in cfg.message_targets:
                 jobs.append((f"Telegram {self._who(cfg, chat)}",
-                             lambda c=chat: self._telegram(cfg, c, text, silent)))
-        if call_text:
-            for user in cfg.call_targets:
-                jobs.append((f"call {user}",
-                             lambda u=user: self._call(u, call_text)))
+                             lambda c=chat: self._telegram(
+                                 cfg, c, f"{title}\n{body}", silent)))
+        if cfg.ntfy_topic:
+            prio = NTFY_URGENT if urgent else (NTFY_QUIET if silent
+                                               else NTFY_NORMAL)
+            jobs.append(("ntfy", lambda: self._ntfy(cfg, title, body, prio,
+                                                    urgent)))
 
         ok, failures = 0, []
         for who, job in jobs:
-            err, detail = self._with_retries(job)
+            err = self._with_retries(job)
             if err is None:
                 ok += 1
-                self.results.put(("log", f"phone alert [{tag}]: {who} — accepted"
-                                         + (f" ({detail})" if detail else "")))
+                self.results.put(("log", f"phone alert [{tag}]: {who} — accepted"))
             else:
                 failures.append(f"{who}: {err}")
                 self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
-                if who.startswith("call ") and err.startswith("CallMeBot refused"):
-                    self._tell_call_blocked(cfg, who[5:], err)
         self.results.put(("done", tag, ok, failures))
 
     @staticmethod
@@ -383,44 +401,23 @@ class Notifier:
                 return s["name"] or s["username"] or chat_id
         return chat_id
 
-    def _tell_call_blocked(self, cfg: AlertConfig, username: str,
-                           err: str) -> None:
-        """A refused call is invisible to the person it was meant for -
-        tell them, on the channel that does reach them, what to do."""
-        m = re.search(r"add (@\w+)", err)
-        if "spam block" in err and m:
-            fix = (f"CallMeBot needs you to add {m.group(1)} to your Telegram "
-                   f"contacts and send it any message (one time). Details: "
-                   f"https://www.callmebot.com/blog/spam-error/")
-        else:
-            fix = (f"CallMeBot is not allowed to call you yet. Open "
-                   f"{CALLMEBOT_BOT} in Telegram and press Start (one time).")
-        for s in cfg.subscribers:
-            if s.get("username") == username and not s.get("group"):
-                try:
-                    self._telegram(cfg, s["chat_id"],
-                                   f"📞 FD Studio tried to CALL you about "
-                                   f"{cfg.name}, but it did not go through. "
-                                   f"{fix}", silent=False)
-                except RuntimeError:
-                    pass
-
-    def _with_retries(self, job) -> tuple[str | None, str]:
-        """(error or None, detail from the service)."""
+    def _with_retries(self, job) -> str | None:
+        """None on success, else the last error."""
         last = ""
         for delay in (0.0,) + RETRY_DELAYS_S:
             if delay:
                 time.sleep(delay)
             try:
-                return None, job() or ""
+                job()
+                return None
             except RuntimeError as exc:
                 last = str(exc)
-                # A wrong token, unknown chat or unauthorised call will not
-                # fix itself by retrying.
+                # A wrong token, unknown chat or bad topic will not fix
+                # itself by retrying. (429 - rate limited - might.)
                 if last.startswith(("HTTP 400", "HTTP 401", "HTTP 403",
-                                    "HTTP 404", "CallMeBot refused")):
+                                    "HTTP 404")):
                     break
-        return last, ""
+        return last
 
     def _telegram(self, cfg: AlertConfig, chat: str, text: str,
                   silent: bool) -> None:
@@ -431,34 +428,17 @@ class Notifier:
         if not json.loads(raw or b"{}").get("ok"):
             raise RuntimeError(f"Telegram refused: {raw[:200]!r}")
 
-    def _call(self, user: str, call_text: str) -> str:
-        # cc=missed: a text copy only if the call is not picked up - the
-        # Telegram message already carries the details.
-        query = urllib.parse.urlencode({
-            "user": user, "text": call_text[:CALL_TEXT_MAX],
-            "rpt": "2", "cc": "missed",
+    def _ntfy(self, cfg: AlertConfig, title: str, body: str, priority: int,
+              urgent: bool) -> None:
+        # JSON, not headers: the titles carry emoji, which HTTP headers do
+        # not reliably survive (ntfy's own publishing docs).
+        raw = self._http(cfg.ntfy_server + "/", json_body={
+            "topic": cfg.ntfy_topic, "title": title, "message": body,
+            "priority": priority,
+            "tags": ["rotating_light"] if urgent else [],
         })
-        raw = self._http(f"{CALLMEBOT_CALL}?{query}")
-        text = _visible_text(raw)
-        # CallMeBot answers HTTP 200 whether or not it can call, and says
-        # why in the page. Verified 2026-09-29 for an unauthorised user:
-        # "Authorization for user @x is not received. Warning! User not
-        # authorized." Other failure wordings are not known, so the page
-        # text goes into the log for a human to read.
-        low = text.lower()
-        if "not authorized" in low or "is not received" in low:
-            raise RuntimeError("CallMeBot refused — this person must first "
-                               f"send /start to {CALLMEBOT_BOT} in Telegram")
-        # Seen 2026-09-30: "Someone reported CallMeBot as spammer, please add
-        # @CallMeBot_API16 in your Telegram contacts and send him a message".
-        # Also HTTP 200, and it was being counted as a successful call. The
-        # account number varies per person (CallMeBot's spam-error page).
-        if "as spammer" in low or "spam-error" in low:
-            m = re.search(r"@CallMeBot_API\w*", text, re.IGNORECASE)
-            caller = m.group(0) if m else "the CallMeBot account that calls you"
-            raise RuntimeError(f"CallMeBot refused (spam block) — add {caller} "
-                               f"to Telegram contacts and send it a message")
-        return f"CallMeBot: {text[-160:]}" if text else ""
+        if not json.loads(raw or b"{}").get("id"):
+            raise RuntimeError(f"ntfy refused: {raw[:200]!r}")
 
     # ── subscriptions: the bot's inbox ───────────────────────────────────────
     def start_listening(self) -> None:
@@ -577,22 +557,22 @@ class Notifier:
             else:
                 old.update(entry)
             _write_json(self.config_path, raw)
-            wearer = str(raw.get("wearer_name", "")).strip() or "the wearer"
             others = [str(s["chat_id"]) for s in subs
                       if str(s.get("chat_id")) != entry["chat_id"]]
+        cfg, _ = load_config(self.config_path)
 
         if old is None:
             self.results.put(("log", f"phone alerts: {entry['name']} "
                                      f"subscribed"))
-            self._reply(token, entry["chat_id"], self._welcome(entry, wearer))
+            self._reply(token, entry["chat_id"], self._welcome(entry, cfg))
             # Visible, not hidden: anyone can find a bot and press Start.
             for other in others:
                 self._reply(token, other, f"👤 {entry['name']} joined the "
-                            f"alert list for {wearer}.", silent=True)
+                            f"alert list for {cfg.name}.", silent=True)
         elif explicit:
             self._reply(token, entry["chat_id"],
-                        "✅ You're already on the alert list for "
-                        f"{wearer}.\n\n" + self._call_note(entry))
+                        f"✅ You're already on the alert list for {cfg.name}."
+                        + self._ntfy_note(cfg))
 
     def _unsubscribe(self, token: str, chat: dict, reply: bool) -> None:
         chat_id = str(chat.get("id", ""))
@@ -610,7 +590,8 @@ class Notifier:
                                      f"unsubscribed"))
         if reply:
             self._reply(token, chat_id, f"You've left the alert list for "
-                        f"{wearer}. Send /start to join again.")
+                        f"{wearer}. Send /start to join again. If you added "
+                        f"the ntfy topic, remove it in the ntfy app too.")
 
     def _raw_config(self) -> dict:
         try:
@@ -620,23 +601,30 @@ class Notifier:
             return _template()
 
     @staticmethod
-    def _call_note(entry: dict) -> str:
-        if entry["group"]:
-            return ("📞 For a phone CALL as well, each person messages this bot "
-                    f"privately and presses Start, then presses Start on "
-                    f"{CALLMEBOT_BOT}.")
-        if not entry["username"]:
-            return ("📞 Phone CALLS need a Telegram username, and you don't "
-                    "have one. Set it in Telegram → Settings → Username, then "
-                    f"send /start here again and press Start on "
-                    f"{CALLMEBOT_BOT}.")
-        return (f"📞 To also get a PHONE CALL: open {CALLMEBOT_BOT} and press "
-                f"Start (one time only).")
+    def _ntfy_note(cfg: AlertConfig) -> str:
+        """How to get the loud alarm - only to people on the bot, since the
+        topic itself is what grants access."""
+        if not cfg.ntfy_topic:
+            return ""
+        host = ntfy_host(cfg)
+        server = ("" if cfg.ntfy_server == NTFY_DEFAULT_SERVER else
+                  f"   (server: {cfg.ntfy_server} - set it in the ntfy app "
+                  f"under 'Use another server')\n")
+        return (f"\n\n🔔 For a LOUD alarm on your phone (long vibration, even "
+                f"when Telegram is muted):\n"
+                f"1. Install the free app \"ntfy\" (Play Store / App Store).\n"
+                f"2. Open it, tap +, and subscribe to this topic:\n"
+                f"   {cfg.ntfy_topic}\n{server}"
+                f"   Android shortcut: ntfy://{host}/{cfg.ntfy_topic}\n"
+                f"3. Android: in ntfy, allow 'Urgent' notifications to "
+                f"override Do Not Disturb.\n"
+                f"Keep the topic private - anyone who has it can read these "
+                f"alerts.")
 
-    def _welcome(self, entry: dict, wearer: str) -> str:
+    def _welcome(self, entry: dict, cfg: AlertConfig) -> str:
         who = "This group is" if entry["group"] else "You're"
-        return (f"✅ {who} now on the alert list for {wearer}.\n\n"
-                f"You'll get a message here if {wearer} may have fallen and "
+        return (f"✅ {who} now on the alert list for {cfg.name}.\n\n"
+                f"You'll get a message here if {cfg.name} may have fallen and "
                 f"doesn't respond within 30 seconds, or presses the SOS "
-                f"button.\n\n{self._call_note(entry)}\n\n"
+                f"button.{self._ntfy_note(cfg)}\n\n"
                 f"Send /stop to leave the list.")

@@ -173,7 +173,8 @@ explicitly deferred by the user. Local import/export only. Do not build toward
 them unless asked.
 
 Exception, asked for by the user (2026-09-29): **phone alerts from the
-laptop** — a Telegram message plus a CallMeBot Telegram voice call when the
-30 s cancel window expires (`tools/fd_studio/notify.py`). Free services, sent
-over the laptop's own internet; no server of ours. The wider escalation
-ladder is still deferred.
+laptop** — a Telegram message plus an urgent ntfy push when the 30 s cancel
+window expires or SOS is pressed (`tools/fd_studio/notify.py`). Free services,
+sent over the laptop's own internet; no server of ours. CallMeBot voice calls
+were tried and removed (shared caller spam-blocked; paid "fix"). The wider
+escalation ladder is still deferred.

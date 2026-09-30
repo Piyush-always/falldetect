@@ -47,35 +47,44 @@ and neither exists in useful quantity. See `doc/PROJECT_OUTLINE.md` §5.3.
 | `ble_link.py` | BLE/NUS transport. What the app actually uses. |
 | `ota.py` | Firmware update over BLE. Shared with `scripts/ota_flash.py`. |
 | `replay.py` | Replays recorded sessions through the engine; sensitivity/specificity. |
-| `notify.py` | Phone alerts: Telegram message + Telegram voice call (CallMeBot). No Qt. |
+| `notify.py` | Phone alerts: Telegram message + loud ntfy push; the bot's subscription inbox. No Qt. |
 | `user_view.py`, `ota_view.py`, `widgets.py` | UI. |
 | `tokens.py` | Every colour and spacing value. Nothing else hardcodes either. |
 
 ### Phone alerts
 
 When a possible fall gets no response for 30 s, or SOS is pressed, FD Studio
-sends a Telegram message to everyone subscribed to the bot and places a
-Telegram voice call that reads the alert aloud. Dismissing it afterwards sends
-an "all clear" message (no call).
+sends a Telegram message to everyone subscribed to the bot and an **urgent
+ntfy push** (priority 5: long vibration bursts, pop-over) to everyone
+subscribed to the ntfy topic. Dismissing it afterwards sends an "all clear"
+at normal priority.
 
 **Subscribing** — each family member, on their phone:
 
 1. Open the bot's link (shown on the User tab, e.g. `t.me/<bot>`) → **Start**.
-   The bot replies "You're now on the alert list". `/stop` leaves.
-   Adding the bot to a family group subscribes the whole group.
-2. For the phone **call** as well: open **@CallMeBot_txtbot** → **Start**
-   (once). Calls need a Telegram username (Settings → Username); the bot's
-   welcome message says so if one is missing.
+   The bot replies "You're now on the alert list", with the ntfy topic.
+   `/stop` leaves. Adding the bot to a family group subscribes the group.
+2. For the loud alarm: install the free **ntfy** app, tap **+**, subscribe to
+   the topic from the welcome message. On Android, let ntfy's *Urgent*
+   notifications override Do Not Disturb.
+
+The ntfy topic is only handed out in that welcome message, because the topic
+itself is the key: anyone who has it can read the alerts.
+
+CallMeBot voice calls were used before and removed (2026-09-30): another
+user's spam report blocked the shared caller, and its "fix" asked for 950
+Telegram Stars per message.
 
 FD Studio picks up /start and /stop only while it is running, and every new
 subscriber is announced (silently) to the others — bots are searchable, so a
 stranger subscribing is visible rather than hidden.
 
-**Shipping the exe with a bot** — put the token in `alerts.bundle.json` at
-the repo root (git-ignored), then build:
+**Shipping the exe with a bot** — put the token and topic in
+`alerts.bundle.json` at the repo root (git-ignored), then build:
 
 ```json
-{ "telegram_bot_token": "123:ABC...", "wearer_name": "Grandma" }
+{ "telegram_bot_token": "123:ABC...", "ntfy_topic": "fd-sos-<long random>",
+  "wearer_name": "Grandma" }
 ```
 
 `.\tools\build_exe.ps1` bundles it and writes `release\FD Studio.exe`
@@ -92,9 +101,9 @@ Limits — say these out loud to whoever relies on it:
   nothing is sent. The alert screen says "alert NOT sent" when a send fails.
 - **One running FD Studio per bot.** Telegram hands each update to one
   listener; two would split the subscribers. Use one bot per wearer.
-- Both services are free. The Telegram Bot API is official; CallMeBot is a
-  third-party service for personal use with no guarantee, and on iPhone the
-  call rings but its audio may not play (their documented Telegram bug).
+- Both services are free. ntfy.sh publishes to anyone subscribed to the
+  topic and cannot say how many phones that is. Its iPhone behaviour is not
+  documented in ntfy's publishing docs and has not been tried here.
 - "Reached" means the service accepted it — not that anyone read or answered.
 
 ---

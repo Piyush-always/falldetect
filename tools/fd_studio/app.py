@@ -546,23 +546,19 @@ class MainWindow(QMainWindow):
             # was not necessarily the wearer.
             where = "in FD Studio on the laptop" if source == "sos-laptop" \
                 else "on the device"
-            text = (f"🆘 SOS for {cfg.name}: the emergency button was pressed "
-                    f"{where} at {at}. Go and check on them now.")
-            call = (f"Emergency. S O S for {cfg.name}. The emergency button "
-                    f"was pressed. Please check on them now.")
-        else:
-            text = (f"⚠️ POSSIBLE FALL: {cfg.name}\nA possible fall at {at} "
-                    f"got no response for {CANCEL_WINDOW_S} seconds. "
+            title = f"🆘 SOS — {cfg.name}"
+            body = (f"The emergency button was pressed {where} at {at}. "
                     f"Go and check on them now.")
-            call = (f"Emergency. A possible fall was detected for {cfg.name}, "
-                    f"with no response for {CANCEL_WINDOW_S} seconds. "
-                    f"Please check on them now.")
+        else:
+            title = f"⚠️ Possible fall — {cfg.name}"
+            body = (f"No response for {CANCEL_WINDOW_S} seconds after a "
+                    f"possible fall at {at}. Go and check on them now.")
         # The siren, whatever happens with the phones: nobody may have been
         # reached, and someone in the house still needs to hear it.
         self.alarm.escalate()
         tag = f"{source}-{int(started)}"
         self._alert_tag = tag
-        if self.notifier.send(tag, text, call_text=call):
+        if self.notifier.send(tag, title, body, urgent=True):
             self.user_tab.phone_state = "sending"
             self.say(f"phone alert [{tag}]: sending")
         else:
@@ -580,12 +576,14 @@ class MainWindow(QMainWindow):
         now = time.strftime("%H:%M")
         where = "on the device" if by == "device" else "on the laptop"
         if escalated:
-            self.notifier.send("dismissed", f"✅ {cfg.name}: the alert from "
-                               f"{at} was dismissed {where} at {now}.")
+            self.notifier.send("dismissed", f"✅ All clear — {cfg.name}",
+                               f"The alert from {at} was dismissed {where} "
+                               f"at {now}.")
         elif by == "device":
-            self.notifier.send("cancelled", f"ℹ️ {cfg.name}: a possible fall "
-                               f"at {at} was cancelled {where} within "
-                               f"{CANCEL_WINDOW_S} s.", silent=True)
+            self.notifier.send("cancelled", f"ℹ️ Cancelled — {cfg.name}",
+                               f"A possible fall at {at} was cancelled "
+                               f"{where} within {CANCEL_WINDOW_S} s.",
+                               silent=True)
 
     def _silence_alarm(self) -> None:
         """Stop the sound only. The alert, the device's red LED and what the
