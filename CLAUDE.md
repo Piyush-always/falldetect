@@ -73,7 +73,16 @@ $D,<seq>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>          sample, 208 Hz
 $P,<seq>,<steps>                                 pedometer, 1 Hz
 $X,<message>                                     device error
 $A,<ax>,<ay>,<az>,<gx>,<gy>,<gz>                 root firmware only, 10 Hz
+$B,<seq>,<count>    button tap, no alert on -> recording toggle   (datalog)
+$C,<seq>            button tap during an alert -> wearer cancel   (datalog)
+$H,<seq>            long press, any time -> SOS, repeated every 2 s
+                    until the host answers 'H'                    (datalog 0.10.0+)
 ```
+
+Host → device, single bytes on NUS RX: `A` cancel window open (slow red, a
+tap cancels), `F` alarm (fast red), `C` clear, `H` SOS received. FD Studio
+re-sends its current A/F/C state every 5 s; the device ignores `A`/`C` while
+an SOS is unacknowledged, so a routine "clear" can never erase one.
 
 **Units: accel milli-g, gyro deci-dps.** Integer only, no floating point in the
 sample path. The same format goes out over USB CDC and BLE/NUS, so all host
@@ -162,3 +171,10 @@ corpus. Until both exist, a model is unfalsifiable. See OUTLINE §5.3.
 Cloud, hub, escalation ladder, voice/mic work, and the power trial are all
 explicitly deferred by the user. Local import/export only. Do not build toward
 them unless asked.
+
+Exception, asked for by the user (2026-09-29): **phone alerts from the
+laptop** — a Telegram message plus an urgent ntfy push when the 30 s cancel
+window expires or SOS is pressed (`tools/fd_studio/notify.py`). Free services,
+sent over the laptop's own internet; no server of ours. CallMeBot voice calls
+were tried and removed (shared caller spam-blocked; paid "fix"). The wider
+escalation ladder is still deferred.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -34,9 +35,10 @@ from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
 from .log_view import LogTab
+from .notify import Notifier, ensure_config_file, seed_from_bundle
 from .ota_view import OtaTab
 from .replay import replay_corpus, summarize
-from .user_view import UserTab
+from .user_view import CANCEL_WINDOW_S, UserTab
 from .widgets import (AxisBars, BubbleLevel, CascadeStepper, OrientationView,
                       StatePlate, TracePlot)
 
@@ -128,6 +130,23 @@ class MainWindow(QMainWindow):
         self._notice = ""
         self._scanning = False
         self.alarm = Alarm()
+        self.notifier = Notifier()
+        # A shipped exe carries the bot token; on first run it becomes this
+        # machine's settings, so the person receiving it configures nothing.
+        if seed_from_bundle(self.notifier.config_path):
+            self.notifier.results.put(("log", "phone alerts: set up from the "
+                                              "bot token bundled in this exe"))
+        # Picks up /start and /stop from the bot for as long as we run.
+        self.notifier.start_listening()
+        # Tag of the phone alert for the alert on screen now, so a result
+        # arriving after that alert was dismissed updates nothing on screen.
+        self._alert_tag: str | None = None
+        self._phone_note = ("", 0.0)       # (text, show until)
+        self._phone_summary_t = 0.0
+        self._siren_err_logged = ""
+        # Last alert command written to the device, (id(link), cmd), and when.
+        self._dev_alert_key = None
+        self._dev_alert_t = 0.0
         # Guided calibration: ticks remaining in the hold, or 0.
         self._cal_hold = 0
         self._cal_deadline = 0
@@ -156,6 +175,13 @@ class MainWindow(QMainWindow):
                                 self._user_alarm,
                                 self.toggle_user_recording)
         self.user_tab._is_sounding = lambda: self.alarm.sounding
+        self.user_tab.on_escalate = self._escalate
+        self.user_tab.on_stand_down = self._stand_down
+        self.user_tab.on_phone_settings = self._phone_settings
+        self.user_tab.on_phone_test = self._phone_test
+        self.user_tab.on_sos = self._screen_sos
+        self.user_tab.on_silence = self._silence_alarm
+        self.user_tab.get_subscribe_link = self._subscribe_link
         self.tabs.addTab(self.user_tab, "User")
 
         debug = QWidget()
@@ -515,6 +541,138 @@ class MainWindow(QMainWindow):
             self.say("TEST alarm started — press I'm OK to stand it down")
         else:
             self.alarm.stop()
+
+    # ── phone alerts ─────────────────────────────────────────────────────────
+    def _escalate(self, source: str, started: float) -> None:
+        """The cancel window ran out (or SOS): tell the family's phones."""
+        cfg, _ = self.notifier.config()
+        at = time.strftime("%H:%M", time.localtime(started))
+        if source in ("sos", "sos-laptop"):
+            # Neutral wording for the laptop button: whoever pressed it, it
+            # was not necessarily the wearer.
+            where = "in FD Studio on the laptop" if source == "sos-laptop" \
+                else "on the device"
+            title = f"🆘 SOS — {cfg.name}"
+            body = (f"The emergency button was pressed {where} at {at}. "
+                    f"Go and check on them now.")
+        else:
+            title = f"⚠️ Possible fall — {cfg.name}"
+            body = (f"No response for {CANCEL_WINDOW_S} seconds after a "
+                    f"possible fall at {at}. Go and check on them now.")
+        # The siren, whatever happens with the phones: nobody may have been
+        # reached, and someone in the house still needs to hear it.
+        self.alarm.escalate()
+        tag = f"{source}-{int(started)}"
+        self._alert_tag = tag
+        if self.notifier.send(tag, title, body, urgent=True):
+            self.user_tab.phone_state = "sending"
+            self.say(f"phone alert [{tag}]: sending")
+        else:
+            self.user_tab.phone_state = "off"
+            self.say(f"phone alert [{tag}] NOT sent — phone alerts are not "
+                     f"set up (User tab → Phone alert settings)")
+
+    def _stand_down(self, escalated: bool, by: str, started: float) -> None:
+        """An alert was dismissed. Phones hear about it only if they heard
+        about the alert - plus a silent note for a device-button cancel, so
+        a knock that silenced a real fall still leaves a trace."""
+        self._alert_tag = None
+        cfg, _ = self.notifier.config()
+        at = time.strftime("%H:%M", time.localtime(started))
+        now = time.strftime("%H:%M")
+        where = "on the device" if by == "device" else "on the laptop"
+        if escalated:
+            self.notifier.send("dismissed", f"✅ All clear — {cfg.name}",
+                               f"The alert from {at} was dismissed {where} "
+                               f"at {now}.")
+        elif by == "device":
+            self.notifier.send("cancelled", f"ℹ️ Cancelled — {cfg.name}",
+                               f"A possible fall at {at} was cancelled "
+                               f"{where} within {CANCEL_WINDOW_S} s.",
+                               silent=True)
+
+    def _silence_alarm(self) -> None:
+        """Stop the sound only. The alert, the device's red LED and what the
+        family was told all stay as they are until someone dismisses it."""
+        self.alarm.stop()
+        self.say("alarm silenced — the alert stays on until dismissed")
+
+    def _screen_sos(self) -> None:
+        """Hold for SOS on the User tab: the device long press, from the
+        laptop. Works with no device connected."""
+        if self.user_tab.raise_sos():
+            self.say("SOS — held on the laptop")
+            # _escalate starts the siren directly - no beep phase first.
+            self._escalate("sos-laptop", self.user_tab._fall_started)
+
+    def _sync_device_alert(self, link) -> None:
+        """Keep the device's LED and button mode in step with the screen.
+
+        'A' makes a tap on the device mean "I'm OK" and shows slow red; 'F'
+        fast red; 'C' back to normal. Re-sent every 5 s as well as on
+        change: a lost write - or a lost $C from the device - must not
+        leave the device and the screen disagreeing for long.
+        """
+        want = self.user_tab.device_alert_mode()
+        now = time.time()
+        key = (id(link), want)
+        if key != self._dev_alert_key or now - self._dev_alert_t > 5.0:
+            if link.send_command(want):
+                self._dev_alert_key, self._dev_alert_t = key, now
+
+    def _subscribe_link(self) -> tuple[str, str]:
+        """(bot link, "") for the subscribe button, or ("", why not)."""
+        cfg, problem = self.notifier.config()
+        if problem:
+            return "", f"The phone-alert settings file is broken: {problem}"
+        if not cfg.telegram_bot_token:
+            return "", ("Phone alerts are not set up on this laptop yet. "
+                        "Open More → Phone alert settings.")
+        if not self.notifier.share_link:
+            # The link comes from the bot itself (getMe), once online.
+            return "", ("Still connecting to Telegram. Check this laptop is "
+                        "online, then try again in a moment.")
+        return "https://" + self.notifier.share_link, ""
+
+    def _phone_settings(self) -> None:
+        path = ensure_config_file()
+        self.say(f"phone alert settings: {path}")
+        try:
+            # Notepad, not the .json file association, which is often an
+            # IDE or nothing at all on a family laptop.
+            subprocess.Popen(["notepad.exe", str(path)])  # noqa: S603,S607
+        except OSError as exc:
+            self.say(f"could not open the settings file: {exc}")
+        self._phone_summary_t = 0.0
+
+    def _phone_test(self) -> None:
+        self.say("phone alerts: sending a test...")
+        self._phone_note = ("Test: sending...", time.time() + 60)
+        self.notifier.send_test()
+
+    def _on_phone_result(self, item) -> None:
+        if item[0] == "log":
+            self.say(item[1])
+            return
+        _, tag, ok, failures = item
+        when = time.strftime("%H:%M")
+        total = ok + len(failures)
+        # Short on screen (the status panel fits ~3 lines); the full reasons
+        # are in the log lines the worker already sent.
+        if failures and not ok:
+            summary = "Could NOT reach any phone (see Log)."
+        elif failures:
+            summary = f"Reached {ok} of {total} at {when}; {len(failures)} failed (see Log)."
+        else:
+            summary = f"Reached {ok} of {total} at {when}."
+        self.say(f"phone alert [{tag}]: {summary} "
+                 + "; ".join(failures))
+        if tag == self._alert_tag:
+            self.user_tab.phone_state = "sent" if ok else "failed"
+            self.user_tab.phone_detail = summary
+        if tag == "test":
+            self._phone_note = ("Test: " + summary, time.time() + 60)
+            self._phone_summary_t = 0.0
 
     def _set_firmware_version(self, ver: str) -> None:
         self.user_tab.firmware_version = ver
@@ -967,6 +1125,24 @@ class MainWindow(QMainWindow):
                 self.say(f"internal error in refresh: {exc!r}")
 
     def _tick_inner(self) -> None:
+        try:
+            while True:
+                self._on_phone_result(self.notifier.results.get_nowait())
+        except queue.Empty:
+            pass
+        if self.alarm.siren_error != self._siren_err_logged:
+            self._siren_err_logged = self.alarm.siren_error
+            if self.alarm.siren_error:
+                self.say(f"siren could not play ({self.alarm.siren_error}) "
+                         f"— using the fast beep instead")
+        now = time.time()
+        # Re-read the settings file every 2 s, not 30 times a second, so an
+        # edit in Notepad shows up without a restart.
+        if now - self._phone_summary_t > 2.0:
+            self._phone_summary_t = now
+            note, until = self._phone_note
+            self.user_tab.phone_summary = (self.notifier.describe()
+                                           + (f"\n{note}" if now < until else ""))
         self.user_tab.tick()
 
         # Bind the link ONCE. _on_event can set self.link to None (an error tears
@@ -988,6 +1164,7 @@ class MainWindow(QMainWindow):
                     self._on_event(kind, payload)
             except queue.Empty:
                 pass
+            self._sync_device_alert(link)
 
         # Connection state from what the link is DOING, not from what a
         # button label says.
@@ -1128,8 +1305,27 @@ class MainWindow(QMainWindow):
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
         elif kind == "cancel":
-            self.alarm.stop()
-            self.say("wearer cancelled the alarm (long press)")
+            # Tap on the device during an alert (firmware 0.10.0+).
+            self.say("wearer cancelled the alert on the device (tap)")
+            if self.user_tab._alert_active():
+                self.user_tab._cancel_alert("device")
+            else:
+                self.alarm.stop()
+        elif kind == "sos":
+            # Acknowledge EVERY copy: the device re-sends $H every 2 s until
+            # it hears 'H', so a lost acknowledgement just means another $H.
+            if self.link is not None:
+                self.link.send_command(b"H")
+            if self.user_tab.raise_sos():
+                self.say("SOS — the wearer long-pressed the device button")
+                # _escalate starts the siren directly - no beep phase first.
+                self._escalate("sos", self.user_tab._fall_started)
+        elif kind == "button" and self.user_tab._alert_active():
+            # Firmware before 0.10.0, or a lost 'A': the device did not know
+            # an alert was on and sent a recording toggle. The wearer meant
+            # stop, and starting a recording mid-alert helps nobody.
+            self.say("device button tapped during an alert — cancelling")
+            self.user_tab._cancel_alert("device")
         elif kind == "button":
             self.say("device button pressed (short) — toggling recording")
             # The device button toggles recording. This exists because you
