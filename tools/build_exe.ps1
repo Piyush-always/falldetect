@@ -3,14 +3,13 @@
     Package FD Studio as a single shareable Windows exe.
 
 .DESCRIPTION
-    Produces FD Studio.exe in the repo root - the ONE exe, tracked in git - no
-    Python needed on the target PC, only Windows 10/11 with Bluetooth. The exe
-    keeps data\ and firmware\ in the folder it is run from, so put it in its
-    own folder before sharing.
+    Produces release\FD Studio.exe - the ONE exe, tracked in git - no Python
+    needed on the target PC, only Windows 10/11 with Bluetooth. release\ is
+    the folder you zip and send (see release\START HERE.txt). The exe keeps
+    data\ and firmware\ in the folder it is run from.
 
     It contains NO bot token: the repo is public. To ship it with phone alerts
-    set up, send it together with alerts.bundle.json (repo root, git-ignored)
-    in the same folder:
+    set up, put alerts.bundle.json (git-ignored) in release\ next to it:
 
         { "telegram_bot_token": "123:ABC...", "ntfy_topic": "fd-sos-...",
           "wearer_name": "Grandma" }
@@ -52,10 +51,13 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
     --collect-submodules bleak `
     --collect-submodules winrt `
     --collect-submodules smpclient `
-    --distpath $repo `
+    --distpath (Join-Path $repo 'release') `
     --workpath (Join-Path $repo 'build\pyinstaller') `
     --specpath (Join-Path $repo 'build\pyinstaller')
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
 
-Write-Host "Built: $(Join-Path $repo 'FD Studio.exe')" -ForegroundColor Green
-Write-Host "To ship with phone alerts: send it with alerts.bundle.json (privately)." -ForegroundColor Cyan
+Write-Host "Built: $(Join-Path $repo 'release\FD Studio.exe')" -ForegroundColor Green
+if (-not (Test-Path (Join-Path $repo 'release\alerts.bundle.json'))) {
+    Write-Host "release\alerts.bundle.json is missing: the shipped exe will have no phone alerts." -ForegroundColor Yellow
+}
+Write-Host "To ship: zip the release folder and send it privately." -ForegroundColor Cyan

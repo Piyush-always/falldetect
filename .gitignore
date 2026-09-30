@@ -22,3 +22,10 @@ firmware/*.extracted.bin
 # Telegram bot token + ntfy topic, shipped NEXT TO FD Studio.exe (which is
 # committed and holds no secret). This file is the secret: never commit it.
 alerts.bundle.json
+
+# release/ is the folder you zip and send. Only the exe and its instructions
+# are tracked; the token file above, and anything the exe creates when run
+# from here (data/, firmware/, logs), stay local.
+release/*
+!release/FD Studio.exe
+!release/START HERE.txt
