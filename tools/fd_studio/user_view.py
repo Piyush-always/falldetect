@@ -422,6 +422,10 @@ class UserTab(QWidget):
         # Long press on the device button. Escalates at once - no cancel
         # window, the wearer asked for help themselves.
         self._sos = False
+        self.sos_source = ""            # "device" or "laptop"
+        # Called when an alert starts, so MainWindow can bring this tab to
+        # the front.
+        self.on_alert_started = None
         self._activity: list[float] = []
         self._last_activity_push = 0.0
 
@@ -575,7 +579,7 @@ class UserTab(QWidget):
         row.addStretch(1)
         row.addWidget(centre)
         row.addStretch(1)
-        scroll = QScrollArea()
+        scroll = self._scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
@@ -652,6 +656,8 @@ class UserTab(QWidget):
                 "sending": f"Pressed at {at}. Sending to phones now...",
                 "failed": f"Pressed at {at}. Alert NOT sent. "
                           f"{self.phone_detail} Go and check on them now.",
+                "unconfirmed": f"Pressed at {at}. {self.phone_detail} "
+                               f"Go and check on them now.",
             }.get(self.phone_state,
                   f"Pressed at {at}. Phone alerts are not set up, so nobody "
                   f"was contacted. Go and check on them now.")
@@ -677,6 +683,13 @@ class UserTab(QWidget):
             elif self.phone_state == "failed":
                 title, sub = ("No response — alert NOT sent",
                               f"{self.phone_detail} Go and check on them now.")
+            elif self.phone_state == "unconfirmed":
+                title, sub = ("No response — alert NOT confirmed",
+                              f"{self.phone_detail} Go and check on them now.")
+            elif self.phone_state == "recording":
+                title, sub = ("No response — go and check",
+                              "A recording is running (data collection), so "
+                              "phones were not alerted.")
             else:
                 title, sub = ("No response — go and check",
                               "Phone alerts are not set up, so nobody was "
@@ -707,6 +720,7 @@ class UserTab(QWidget):
             return
         self._test_fall = True
         self._fall_started = time.time()
+        self._alert_started_hook()
         self._cancelled_until = 0.0
         if self._on_alarm is not None:
             self._on_alarm(True)
@@ -714,6 +728,14 @@ class UserTab(QWidget):
     def _alert_active(self) -> bool:
         return (self._test_fall or self._fall_started is not None
                 or (self._is_sounding is not None and self._is_sounding()))
+
+    def _alert_started_hook(self) -> None:
+        """An alert just started: scroll back to the status panel (someone
+        may have left the page scrolled down to the phone buttons) and let
+        MainWindow bring this tab forward (PR #1 review)."""
+        self._scroll.verticalScrollBar().setValue(0)
+        if self.on_alert_started is not None:
+            self.on_alert_started()
 
     def _toggle_more(self) -> None:
         show = not self.more.isVisible()
@@ -742,8 +764,8 @@ class UserTab(QWidget):
     def _sounding(self) -> bool:
         return self._is_sounding is not None and self._is_sounding()
 
-    def raise_sos(self) -> bool:
-        """The wearer long-pressed the device button.
+    def raise_sos(self, source: str = "device") -> bool:
+        """SOS - "device" (long press) or "laptop" (Hold for SOS).
 
         True for a NEW SOS. The device repeats $H every 2 s until the host
         acknowledges, so repeats are expected and must not re-alert anyone.
@@ -751,6 +773,8 @@ class UserTab(QWidget):
         if self._sos:
             return False
         self._sos = True
+        self.sos_source = source
+        self._alert_started_hook()
         self._test_fall = False
         self._fall_started = time.time()
         self._escalated = True          # the caller alerts the phones now
@@ -774,6 +798,7 @@ class UserTab(QWidget):
         self._test_fall = False
         self._escalated = False
         self._sos = False
+        self.sos_source = ""
         self.phone_state, self.phone_detail = "", ""
         if self._on_alarm is not None:
             self._on_alarm(False)
@@ -905,6 +930,7 @@ class UserTab(QWidget):
         if (engine.stage is Stage.CONFIRMED or self._test_fall)                 and now > self._cancelled_until:
             if self._fall_started is None:
                 self._fall_started = now
+                self._alert_started_hook()
         if self._fall_started is not None:
             self._render_alert(now)
             return

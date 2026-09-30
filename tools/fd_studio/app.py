@@ -35,7 +35,8 @@ from .ble_link import BleDeviceLink, explain, scan_blocking
 from .engine import Engine, Posture, Stage, Thresholds
 from .link import LinkBase
 from .log_view import LogTab
-from .notify import Notifier, ensure_config_file, seed_from_bundle
+from .notify import (Notifier, ensure_config_file, migrate_subscribers,
+                     seed_from_bundle)
 from .ota_view import OtaTab
 from .replay import replay_corpus, summarize
 from .user_view import CANCEL_WINDOW_S, UserTab
@@ -136,11 +137,22 @@ class MainWindow(QMainWindow):
         if seed_from_bundle(self.notifier.config_path):
             self.notifier.results.put(("log", "phone alerts: set up from the "
                                               "bot token bundled in this exe"))
+        # Before anyone can open alerts.json in Notepad: move subscribers
+        # kept there by older versions into subscribers.json.
+        moved = migrate_subscribers(self.notifier.config_path)
+        if moved:
+            self.notifier.results.put(("log", f"phone alerts: moved {moved} "
+                                              f"subscriber(s) to "
+                                              f"subscribers.json"))
         # Picks up /start and /stop from the bot for as long as we run.
         self.notifier.start_listening()
         # Tag of the phone alert for the alert on screen now, so a result
         # arriving after that alert was dismissed updates nothing on screen.
         self._alert_tag: str | None = None
+        # The escalated alert, for re-sending a failed phone alert.
+        self._alert_source = ""
+        self._alert_started = 0.0
+        self._alert_sent_t = 0.0
         self._phone_note = ("", 0.0)       # (text, show until)
         self._phone_summary_t = 0.0
         self._siren_err_logged = ""
@@ -177,6 +189,10 @@ class MainWindow(QMainWindow):
         self.user_tab._is_sounding = lambda: self.alarm.sounding
         self.user_tab.on_escalate = self._escalate
         self.user_tab.on_stand_down = self._stand_down
+        # An alert must be seen: bring the User tab to the front when one
+        # starts, whatever tab someone was looking at (PR #1 review).
+        self.user_tab.on_alert_started = (
+            lambda: self.tabs.setCurrentWidget(self.user_tab))
         self.user_tab.on_phone_settings = self._phone_settings
         self.user_tab.on_phone_test = self._phone_test
         self.user_tab.on_sos = self._screen_sos
@@ -544,33 +560,72 @@ class MainWindow(QMainWindow):
 
     # ── phone alerts ─────────────────────────────────────────────────────────
     def _escalate(self, source: str, started: float) -> None:
-        """The cancel window ran out (or SOS): tell the family's phones."""
-        cfg, _ = self.notifier.config()
-        at = time.strftime("%H:%M", time.localtime(started))
-        if source in ("sos", "sos-laptop"):
-            # Neutral wording for the laptop button: whoever pressed it, it
-            # was not necessarily the wearer.
-            where = "in FD Studio on the laptop" if source == "sos-laptop" \
-                else "on the device"
-            title = f"🆘 SOS — {cfg.name}"
-            body = (f"The emergency button was pressed {where} at {at}. "
-                    f"Go and check on them now.")
-        else:
-            title = f"⚠️ Possible fall — {cfg.name}"
-            body = (f"No response for {CANCEL_WINDOW_S} seconds after a "
-                    f"possible fall at {at}. Go and check on them now.")
-        # The siren, whatever happens with the phones: nobody may have been
-        # reached, and someone in the house still needs to hear it.
+        """The cancel window ran out (or SOS): siren, then the phones."""
+        # The siren FIRST, before any settings or network work: nobody may be
+        # reached, someone in the house still needs to hear it, and a broken
+        # settings file once raised here before the siren started, leaving an
+        # SOS silent (PR #1 review).
         self.alarm.escalate()
-        tag = f"{source}-{int(started)}"
+        self._alert_source, self._alert_started = source, started
+        self._send_alert(source, started)
+
+    def _send_alert(self, source: str, started: float) -> None:
+        """Send (or re-send) the phone alert for the alert on screen."""
+        self._alert_sent_t = time.time()
+        tag = f"{source}-{int(started)}-{int(self._alert_sent_t)}"
         self._alert_tag = tag
-        if self.notifier.send(tag, title, body, urgent=True):
-            self.user_tab.phone_state = "sending"
-            self.say(f"phone alert [{tag}]: sending")
-        else:
-            self.user_tab.phone_state = "off"
-            self.say(f"phone alert [{tag}] NOT sent — phone alerts are not "
-                     f"set up (User tab → Phone alert settings)")
+        try:
+            if (source == "fall" and self.link is not None
+                    and self.link.recording):
+                # Data collection: falls here are staged onto a mat, with a
+                # spotter (DATA_COLLECTION.md). Paging the family for each
+                # one is wrong. SOS still goes out: that is always deliberate.
+                self.user_tab.phone_state = "recording"
+                self.say(f"phone alert [{tag}] not sent — a recording is in "
+                         f"progress (data collection)")
+                return
+            cfg, problem = self.notifier.config()
+            at = time.strftime("%H:%M", time.localtime(started))
+            if source in ("sos", "sos-laptop"):
+                # Neutral wording for the laptop button: whoever pressed it,
+                # it was not necessarily the wearer.
+                where = "in FD Studio on the laptop" \
+                    if source == "sos-laptop" else "on the device"
+                title = f"🆘 SOS — {cfg.name}"
+                body = (f"The emergency button was pressed {where} at {at}. "
+                        f"Go and check on them now.")
+            else:
+                title = f"⚠️ Possible fall — {cfg.name}"
+                body = (f"No response for {CANCEL_WINDOW_S} seconds after a "
+                        f"possible fall at {at}. Go and check on them now.")
+            if self.notifier.send(tag, title, body, urgent=True):
+                self.user_tab.phone_state = "sending"
+                self.say(f"phone alert [{tag}]: sending")
+            elif problem:
+                self.user_tab.phone_state = "failed"
+                self.user_tab.phone_detail = f"Settings problem: {problem}."
+                self.say(f"phone alert [{tag}] NOT sent — {problem}")
+            else:
+                self.user_tab.phone_state = "off"
+                self.say(f"phone alert [{tag}] NOT sent — phone alerts are "
+                         f"not set up (User tab → More → Phone alert settings)")
+        except Exception as exc:  # noqa: BLE001 - the alert path must go on
+            self.user_tab.phone_state = "failed"
+            self.user_tab.phone_detail = "Could not send (internal error)."
+            self.say(f"phone alert [{tag}] NOT sent — internal error "
+                     f"{type(exc).__name__}")
+
+    def _resend_failed_alert(self) -> None:
+        """An escalated alert whose phone alert failed is re-sent every 60 s
+        until someone dismisses it: a Wi-Fi drop at the wrong moment must
+        not mean the family is never told (PR #1 review)."""
+        ut = self.user_tab
+        if (ut._fall_started is None or not ut._escalated
+                or ut.phone_state not in ("failed", "unconfirmed")
+                or time.time() - self._alert_sent_t < 60.0):
+            return
+        self.say("phone alert: trying again")
+        self._send_alert(self._alert_source, self._alert_started)
 
     def _stand_down(self, escalated: bool, by: str, started: float) -> None:
         """An alert was dismissed. Phones hear about it only if they heard
@@ -600,7 +655,7 @@ class MainWindow(QMainWindow):
     def _screen_sos(self) -> None:
         """Hold for SOS on the User tab: the device long press, from the
         laptop. Works with no device connected."""
-        if self.user_tab.raise_sos():
+        if self.user_tab.raise_sos("laptop"):
             self.say("SOS — held on the laptop")
             # _escalate starts the siren directly - no beep phase first.
             self._escalate("sos-laptop", self.user_tab._fall_started)
@@ -654,21 +709,29 @@ class MainWindow(QMainWindow):
         if item[0] == "log":
             self.say(item[1])
             return
-        _, tag, ok, failures = item
+        _, tag, ok, failures, tg_ok, ntfy_ok = item
         when = time.strftime("%H:%M")
-        total = ok + len(failures)
         # Short on screen (the status panel fits ~3 lines); the full reasons
-        # are in the log lines the worker already sent.
-        if failures and not ok:
-            summary = "Could NOT reach any phone (see Log)."
-        elif failures:
-            summary = f"Reached {ok} of {total} at {when}; {len(failures)} failed (see Log)."
+        # are in the log lines the worker already sent. Only Telegram can
+        # confirm that a person was reached: ntfy accepts a post whether or
+        # not any phone is subscribed, so it never counts as "family
+        # alerted" on its own (PR #1 review).
+        if tg_ok:
+            summary = (f"Reached {tg_ok} on Telegram at {when}"
+                       + ("; loud alarm posted" if ntfy_ok else "")
+                       + (f"; {len(failures)} failed (see Log)."
+                          if failures else "."))
+            state = "sent"
+        elif ntfy_ok:
+            summary = ("Posted to the ntfy alarm, but no Telegram message was "
+                       "delivered, so nobody may have seen it.")
+            state = "unconfirmed"
         else:
-            summary = f"Reached {ok} of {total} at {when}."
-        self.say(f"phone alert [{tag}]: {summary} "
-                 + "; ".join(failures))
+            summary = "Could NOT reach any phone (see Log)."
+            state = "failed"
+        self.say(f"phone alert [{tag}]: {summary} " + "; ".join(failures))
         if tag == self._alert_tag:
-            self.user_tab.phone_state = "sent" if ok else "failed"
+            self.user_tab.phone_state = state
             self.user_tab.phone_detail = summary
         if tag == "test":
             self._phone_note = ("Test: " + summary, time.time() + 60)
@@ -1012,7 +1075,7 @@ class MainWindow(QMainWindow):
             items, items.index(preset) if preset in items else 0, True)
 
         label = (_safe_label(label)
-                 if ok and label.strip() != LABEL_PLACEHOLDER else "")
+                 if ok and label.strip() != LABEL_PLACEHOLDER else "").lower()
         if not label:
             # Dismissing a dialog must never destroy a recording. A fall you
             # just took cannot be re-taken because you hit Escape.
@@ -1070,7 +1133,7 @@ class MainWindow(QMainWindow):
         raw = self.in_label.currentText().strip()
         # Sanitised: this goes straight into a path, and a ':' or '?' made
         # open() raise inside the slot - invisible in the windowed exe.
-        label = "" if raw == LABEL_PLACEHOLDER else _safe_label(raw)
+        label = "" if raw == LABEL_PLACEHOLDER else _safe_label(raw).lower()
         if not label:
             self.say("pick an Activity before recording — a session saved "
                      "under the wrong label scores as the wrong thing")
@@ -1144,6 +1207,7 @@ class MainWindow(QMainWindow):
             self.user_tab.phone_summary = (self.notifier.describe()
                                            + (f"\n{note}" if now < until else ""))
         self.user_tab.tick()
+        self._resend_failed_alert()
 
         # Bind the link ONCE. _on_event can set self.link to None (an error tears
         # the connection down), and re-reading self.link each iteration then
@@ -1268,7 +1332,13 @@ class MainWindow(QMainWindow):
 
         if self.link and stats:
             s = stats
-            if s["stale"] > 3.0:
+            if s["stale"] > 3.0 and s["link_stale"] <= 3.0:
+                # Same split as the plate: status still arriving means the
+                # link is fine and the sensor is not (PR #1 review).
+                self.lbl_status.setText(
+                    f"no samples for {int(s['stale'])}s, status still "
+                    f"arriving — power-cycle the device")
+            elif s["stale"] > 3.0:
                 self.lbl_status.setText(
                     f"NO DATA for {int(s['stale'])}s — reflashed? reconnect")
             elif 0 < s["rate"] < 100:
@@ -1304,6 +1374,18 @@ class MainWindow(QMainWindow):
             self.btn_conn.setText("Connect")
             for b in (self.btn_cal, self.btn_rec, self.btn_stop):
                 b.setEnabled(False)
+        elif kind in ("cancel", "button") and self.link is not None \
+                and self.link.recording:
+            # Data collection: the button is the recording's start/stop. A
+            # staged fall confirms while the volunteer lies on the mat, so the
+            # "stop" tap arrives as a cancel ($C). Honour what they meant -
+            # stop the recording - and clear the alert too (PR #1 review).
+            self.say("device button during a recording — stopping it"
+                     + (" and clearing the alert"
+                        if self.user_tab._alert_active() else ""))
+            if self.user_tab._alert_active():
+                self.user_tab._cancel_alert("device")
+            self.toggle_user_recording(False)
         elif kind == "cancel":
             # Tap on the device during an alert (firmware 0.10.0+).
             self.say("wearer cancelled the alert on the device (tap)")
@@ -1312,14 +1394,25 @@ class MainWindow(QMainWindow):
             else:
                 self.alarm.stop()
         elif kind == "sos":
-            # Acknowledge EVERY copy: the device re-sends $H every 2 s until
-            # it hears 'H', so a lost acknowledgement just means another $H.
-            if self.link is not None:
-                self.link.send_command(b"H")
-            if self.user_tab.raise_sos():
-                self.say("SOS — the wearer long-pressed the device button")
-                # _escalate starts the siren directly - no beep phase first.
-                self._escalate("sos", self.user_tab._fall_started)
+            new = self.user_tab.raise_sos("device")
+            try:
+                if new:
+                    self.say("SOS — the wearer long-pressed the device button")
+                    # _escalate starts the siren first - no beep phase.
+                    self._escalate("sos", self.user_tab._fall_started)
+                elif self.user_tab.sos_source == "laptop":
+                    # A laptop SOS was showing; this one is the wearer's own.
+                    # Say so, rather than merging it silently (PR #1 review).
+                    self.user_tab.sos_source = "device"
+                    self.say("SOS — the wearer ALSO pressed the device button")
+                    self._escalate("sos", time.time())
+            finally:
+                # Acknowledge only AFTER the SOS has been handled, and every
+                # copy: the device re-sends $H every 2 s until it hears 'H',
+                # so an ack sent before a failure here would have stopped the
+                # re-sends of an SOS nobody acted on (PR #1 review).
+                if self.link is not None:
+                    self.link.send_command(b"H")
         elif kind == "button" and self.user_tab._alert_active():
             # Firmware before 0.10.0, or a lost 'A': the device did not know
             # an alert was on and sent a recording toggle. The wearer meant

@@ -53,6 +53,7 @@ secrets: share it privately, never commit or publish it.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import queue
@@ -101,9 +102,10 @@ _TEMPLATE = {
         "telegram_bot_token: from @BotFather in Telegram (/newbot).",
         "ntfy_topic: a long random name, e.g. fd-sos-3f9a1c7e2b6d4a80. Keep it "
         "private: anyone who has it can read the alerts.",
-        "subscribers: filled in automatically when someone presses Start on "
-        "the bot, removed when they send /stop. No need to edit.",
-        "telegram_chat_ids: optional extra Telegram chats, added by hand.",
+        "telegram_chat_ids: optional extra Telegram chats, added by hand, as "
+        "a list: [\"123456789\"].",
+        "People who press Start on the bot are kept in subscribers.json next "
+        "to this file - managed by the bot, not edited here.",
         "Free services, no guarantee. Alerts go out only while this laptop "
         "is on, online, and FD Studio is open.",
     ],
@@ -111,7 +113,6 @@ _TEMPLATE = {
     "telegram_bot_token": "",
     "ntfy_topic": "",
     "ntfy_server": NTFY_DEFAULT_SERVER,
-    "subscribers": [],
     "telegram_chat_ids": [],
 }
 
@@ -119,11 +120,20 @@ _TEMPLATE = {
 _BUNDLE_FIELDS = ("telegram_bot_token", "wearer_name", "ntfy_topic",
                   "ntfy_server")
 
+#: Bot-managed subscriber list, beside alerts.json. Its own file because
+#: alerts.json is the one opened in Notepad: a save from a Notepad window
+#: left open would otherwise write back an old list and silently drop people
+#: who had been told they are on it (PR #1 review).
+SUBSCRIBERS_NAME = "subscribers.json"
+
 
 def _template() -> dict:
-    """A fresh copy. dict(_TEMPLATE) would share its lists, and the first
-    subscriber appended would be added to the template itself."""
+    """A fresh copy. dict(_TEMPLATE) would share its lists."""
     return json.loads(json.dumps(_TEMPLATE))
+
+
+def subscribers_path(config_path: Path) -> Path:
+    return config_path.with_name(SUBSCRIBERS_NAME)
 
 
 @dataclass
@@ -151,8 +161,55 @@ class AlertConfig:
             or bool(self.ntfy_topic)
 
 
+class _Bad(Exception):
+    """A settings value of the wrong type - reported, never raised on."""
+
+
+def _as_str(value, name: str) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        return str(value).strip()
+    raise _Bad(f"{name} must be text")
+
+
+def _as_list(value, name: str) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (str, int)) and not isinstance(value, bool):
+        return [value]          # one chat id typed without brackets
+    raise _Bad(f"{name} must be a list")
+
+
+def _clean_subscribers(items) -> list[dict]:
+    out = []
+    for s in _as_list(items, "subscribers"):
+        if isinstance(s, dict) and _as_str(s.get("chat_id"), "chat_id"):
+            out.append({"chat_id": _as_str(s.get("chat_id"), "chat_id"),
+                        "name": _as_str(s.get("name"), "name"),
+                        "username": _as_str(s.get("username"), "username"),
+                        "group": bool(s.get("group", False))})
+    return out
+
+
+def read_subscribers(config_path: Path) -> tuple[list[dict], str]:
+    """(subscribers, problem). Missing file = nobody yet. An unreadable file
+    is a PROBLEM, not an empty list: treating it as empty and writing back
+    would wipe everyone (PR #1 review)."""
+    path = subscribers_path(config_path)
+    if not path.exists():
+        return [], ""
+    try:
+        return _clean_subscribers(json.loads(path.read_text(encoding="utf-8"))), ""
+    except (OSError, ValueError, _Bad) as exc:
+        return [], f"cannot read {path.name}: {exc}"
+
+
 def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
-    """(config, problem). A broken file is reported, never guessed at."""
+    """(config, problem). A broken file is reported, never guessed at - and
+    never raised on: this runs inside the alert path (PR #1 review)."""
     if not path.exists():
         return AlertConfig(), ""
     try:
@@ -161,31 +218,60 @@ def load_config(path: Path = CONFIG_PATH) -> tuple[AlertConfig, str]:
         return AlertConfig(), f"cannot read {path.name}: {exc}"
     if not isinstance(raw, dict):
         return AlertConfig(), f"{path.name} is not a JSON object"
-    subs = [s for s in raw.get("subscribers", [])
-            if isinstance(s, dict) and str(s.get("chat_id", "")).strip()]
-    cfg = AlertConfig(
-        wearer_name=str(raw.get("wearer_name", "")),
-        telegram_bot_token=str(raw.get("telegram_bot_token", "")).strip(),
-        ntfy_topic=str(raw.get("ntfy_topic", "")).strip(),
-        ntfy_server=(str(raw.get("ntfy_server", "")).strip().rstrip("/")
-                     or NTFY_DEFAULT_SERVER),
-        subscribers=[{"chat_id": str(s["chat_id"]).strip(),
-                      "name": str(s.get("name", "")),
-                      "username": str(s.get("username", "")),
-                      "group": bool(s.get("group", False))} for s in subs],
-        telegram_chat_ids=[str(c).strip() for c in
-                           raw.get("telegram_chat_ids", []) if str(c).strip()],
-    )
-    return cfg, ""
+    subs, sub_problem = read_subscribers(path)
+    try:
+        # Old files kept subscribers in alerts.json; still honoured until
+        # migrate_subscribers() has moved them.
+        legacy = _clean_subscribers(raw.get("subscribers"))
+        known = {s["chat_id"] for s in subs}
+        subs += [s for s in legacy if s["chat_id"] not in known]
+        cfg = AlertConfig(
+            wearer_name=_as_str(raw.get("wearer_name"), "wearer_name"),
+            telegram_bot_token=_as_str(raw.get("telegram_bot_token"),
+                                       "telegram_bot_token"),
+            ntfy_topic=_as_str(raw.get("ntfy_topic"), "ntfy_topic"),
+            ntfy_server=(_as_str(raw.get("ntfy_server"), "ntfy_server")
+                         .rstrip("/") or NTFY_DEFAULT_SERVER),
+            subscribers=subs,
+            telegram_chat_ids=[c for c in (
+                _as_str(x, "telegram_chat_ids")
+                for x in _as_list(raw.get("telegram_chat_ids"),
+                                  "telegram_chat_ids")) if c],
+        )
+    except _Bad as exc:
+        return AlertConfig(), f"{path.name}: {exc}"
+    return cfg, sub_problem
 
 
-def _write_json(path: Path, raw: dict) -> None:
+def _write_json(path: Path, raw) -> None:
     """Write via a temp file and rename: a crash mid-write must not leave a
-    half-written settings file that loses every subscriber."""
+    half-written file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def migrate_subscribers(path: Path = CONFIG_PATH) -> int:
+    """Move subscribers from an older alerts.json into subscribers.json.
+    Run at startup, before anyone can have Notepad open. Returns how many."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        legacy = _clean_subscribers(raw.get("subscribers")) \
+            if isinstance(raw, dict) else []
+    except (OSError, ValueError, _Bad):
+        return 0
+    if not legacy:
+        return 0
+    subs, problem = read_subscribers(path)
+    if problem:
+        return 0                 # never overwrite a file we cannot read
+    known = {s["chat_id"] for s in subs}
+    _write_json(subscribers_path(path),
+                subs + [s for s in legacy if s["chat_id"] not in known])
+    raw.pop("subscribers", None)
+    _write_json(path, raw)
+    return len(legacy)
 
 
 def _bundled_defaults() -> dict:
@@ -212,10 +298,12 @@ def seed_from_bundle(path: Path = CONFIG_PATH) -> bool:
             else _template()
     except (OSError, ValueError):
         return False            # a broken file is reported by load_config
+    if not isinstance(raw, dict):
+        return False
     changed = False
     for key in _BUNDLE_FIELDS:
         value = str(bundle.get(key, "")).strip()
-        current = str(raw.get(key, "")).strip()
+        current = str(raw.get(key, "") or "").strip()
         if value and (not current or (key == "ntfy_server"
                                       and current == NTFY_DEFAULT_SERVER
                                       and value != current)):
@@ -236,9 +324,12 @@ def ensure_config_file(path: Path = CONFIG_PATH) -> Path:
 
 def _http(url: str, data: dict | None = None,
           json_body: dict | None = None) -> bytes:
-    """GET (no body), form POST (data) or JSON POST (json_body). Raises
-    RuntimeError with the service's own error text, because 'HTTP 400' alone
-    does not say what to fix."""
+    """GET (no body), form POST (data) or JSON POST (json_body). Raises ONLY
+    RuntimeError, with the service's own error text where there is one.
+
+    Never puts the URL in the message: a Telegram URL contains the bot token,
+    and these messages go to the Log tab (PR #1 review).
+    """
     headers = {"User-Agent": "FD-Studio"}
     body = None
     if json_body is not None:
@@ -246,21 +337,39 @@ def _http(url: str, data: dict | None = None,
         headers["Content-Type"] = "application/json"
     elif data is not None:
         body = urllib.parse.urlencode(data).encode()
-    req = urllib.request.Request(url, data=body, headers=headers)
     try:
+        req = urllib.request.Request(url, data=body, headers=headers)
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read()[:300].decode("utf-8", "replace")
         try:
             j = json.loads(detail)
-            detail = j.get("description") or j.get("error") or detail
+            detail = (j.get("description") or j.get("error") or detail) \
+                if isinstance(j, dict) else detail
         except ValueError:
             pass
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
     except (urllib.error.URLError, OSError) as exc:
         reason = getattr(exc, "reason", exc)
         raise RuntimeError(f"no connection ({reason})") from None
+    except (ValueError, http.client.HTTPException) as exc:
+        # A bad URL (e.g. a space in the token) or a garbled reply.
+        raise RuntimeError(f"bad request or reply ({type(exc).__name__})") \
+            from None
+
+
+def _reply_json(raw: bytes, service: str) -> dict:
+    """A service's JSON reply as a dict. A 200 with HTML (a proxy or captive
+    portal page) is a failure, not a crash (PR #1 review)."""
+    try:
+        j = json.loads(raw or b"{}")
+    except ValueError:
+        raise RuntimeError(f"unexpected reply from {service} (not JSON)") \
+            from None
+    if not isinstance(j, dict):
+        raise RuntimeError(f"unexpected reply from {service}")
+    return j
 
 
 def ntfy_host(cfg: AlertConfig) -> str:
@@ -342,8 +451,10 @@ class Notifier:
         nobody should be woken for. Neither: a normal notification.
         """
         cfg, problem = self.config()
-        if problem or not cfg.configured:
+        if not cfg.configured:
             return False
+        if problem:     # e.g. subscribers.json unreadable: send to the rest
+            self.results.put(("log", f"phone alerts: {problem}"))
         self._jobs.put(lambda: self._send_all(cfg, tag, title, body,
                                               urgent, silent))
         return True
@@ -354,15 +465,15 @@ class Notifier:
 
     def _test_job(self) -> None:
         cfg, problem = self.config()
-        if problem:
-            self.results.put(("done", "test", 0, [problem]))
+        if problem and not cfg.configured:
+            self.results.put(("done", "test", 0, [problem], 0, 0))
             return
         if not cfg.configured:
             how = (f"send people the link {self.share_link} and ask them to "
                    f"press Start" if self.share_link else
                    "press 'Phone alert settings' and add the bot token")
             self.results.put(("done", "test", 0,
-                              [f"nobody to alert yet — {how}"]))
+                              [f"nobody to alert yet — {how}"], 0, 0))
             return
         # Urgent on purpose: a test has to prove the LOUD alarm works.
         self._send_all(cfg, "test", "🧪 Test from FD Studio",
@@ -371,28 +482,42 @@ class Notifier:
 
     def _send_all(self, cfg: AlertConfig, tag: str, title: str, body: str,
                   urgent: bool, silent: bool) -> None:
+        # ntfy FIRST: it is the loud one (can override Do Not Disturb), and
+        # queued after every Telegram chat's retries it could arrive minutes
+        # late when Telegram is unreachable (PR #1 review).
         jobs = []
-        if cfg.telegram_bot_token:
-            for chat in cfg.message_targets:
-                jobs.append((f"Telegram {self._who(cfg, chat)}",
-                             lambda c=chat: self._telegram(
-                                 cfg, c, f"{title}\n{body}", silent)))
         if cfg.ntfy_topic:
             prio = NTFY_URGENT if urgent else (NTFY_QUIET if silent
                                                else NTFY_NORMAL)
             jobs.append(("ntfy", lambda: self._ntfy(cfg, title, body, prio,
                                                     urgent)))
+        if cfg.telegram_bot_token:
+            for chat in cfg.message_targets:
+                jobs.append((f"Telegram {self._who(cfg, chat)}",
+                             lambda c=chat: self._telegram(
+                                 cfg, c, f"{title}\n{body}", silent)))
 
-        ok, failures = 0, []
-        for who, job in jobs:
-            err = self._with_retries(job)
-            if err is None:
-                ok += 1
-                self.results.put(("log", f"phone alert [{tag}]: {who} — accepted"))
-            else:
-                failures.append(f"{who}: {err}")
-                self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
-        self.results.put(("done", tag, ok, failures))
+        # ("done", tag, ok, failures, telegram_ok, ntfy_ok). Counted per
+        # channel because only Telegram can confirm a person: ntfy accepts a
+        # post whether or not any phone is subscribed (PR #1 review).
+        ok = tg_ok = ntfy_ok = 0
+        failures: list[str] = []
+        try:
+            for who, job in jobs:
+                err = self._with_retries(job)
+                if err is None:
+                    ok += 1
+                    if who == "ntfy":
+                        ntfy_ok += 1
+                    else:
+                        tg_ok += 1
+                    self.results.put(("log", f"phone alert [{tag}]: {who} — accepted"))
+                else:
+                    failures.append(f"{who}: {err}")
+                    self.results.put(("log", f"phone alert [{tag}]: {who} — FAILED: {err}"))
+        finally:
+            # Always an outcome, or the screen says "Sending..." for ever.
+            self.results.put(("done", tag, ok, failures, tg_ok, ntfy_ok))
 
     @staticmethod
     def _who(cfg: AlertConfig, chat_id: str) -> str:
@@ -417,6 +542,10 @@ class Notifier:
                 if last.startswith(("HTTP 400", "HTTP 401", "HTTP 403",
                                     "HTTP 404")):
                     break
+            except Exception as exc:  # noqa: BLE001 - never abort the batch
+                # Type only: str() of some errors carries the URL, and a
+                # Telegram URL carries the bot token.
+                return f"unexpected error ({type(exc).__name__})"
         return last
 
     def _telegram(self, cfg: AlertConfig, chat: str, text: str,
@@ -425,7 +554,7 @@ class Notifier:
             TELEGRAM_API.format(token=cfg.telegram_bot_token, method="sendMessage"),
             {"chat_id": chat, "text": text,
              "disable_notification": "true" if silent else "false"})
-        if not json.loads(raw or b"{}").get("ok"):
+        if not _reply_json(raw, "Telegram").get("ok"):
             raise RuntimeError(f"Telegram refused: {raw[:200]!r}")
 
     def _ntfy(self, cfg: AlertConfig, title: str, body: str, priority: int,
@@ -437,7 +566,7 @@ class Notifier:
             "priority": priority,
             "tags": ["rotating_light"] if urgent else [],
         })
-        if not json.loads(raw or b"{}").get("id"):
+        if not _reply_json(raw, "ntfy").get("id"):
             raise RuntimeError(f"ntfy refused: {raw[:200]!r}")
 
     # ── subscriptions: the bot's inbox ───────────────────────────────────────
@@ -447,54 +576,58 @@ class Notifier:
                          name="telegram-inbox").start()
 
     def _listen(self) -> None:
+        """Never returns. A dead inbox is silent - nobody new is subscribed
+        while the QR code keeps sending people to the bot - so every error is
+        logged once and the loop carries on (PR #1 review)."""
         offset: int | None = None
         last_err = ""
         token_seen = ""
         while True:
-            cfg, problem = self.config()
-            token = cfg.telegram_bot_token
-            if problem or not token:
-                time.sleep(5.0)          # set up later; pick it up then
-                continue
-            api = lambda m: TELEGRAM_API.format(token=token, method=m)  # noqa: E731
-            if token != token_seen:
-                try:
-                    me = json.loads(self._http(api("getMe"))).get("result", {})
-                    self.bot_username = "@" + me.get("username", "")
+            try:
+                cfg, _problem = self.config()
+                token = cfg.telegram_bot_token
+                if not token:
+                    time.sleep(5.0)      # set up later; pick it up then
+                    continue
+                api = lambda m: TELEGRAM_API.format(token=token, method=m)  # noqa: E731
+                if token != token_seen:
+                    # A different bot: its update ids have nothing to do with
+                    # the old one's, and a stale offset would confirm (discard)
+                    # its /start messages unseen (PR #1 review).
+                    offset = None
+                    self.bot_username = ""
+                    me = _reply_json(self._http(api("getMe")), "Telegram")
+                    self.bot_username = "@" + str((me.get("result") or {})
+                                                  .get("username", ""))
                     token_seen = token
                     self.results.put(("log", f"phone alerts: listening to "
                                              f"{self.bot_username}"))
-                except (RuntimeError, ValueError) as exc:
-                    self._inbox_error(str(exc), last_err)
-                    last_err = str(exc)
-                    time.sleep(30.0)
-                    continue
-            t0 = time.monotonic()
-            params = {"timeout": str(POLL_TIMEOUT_S),
-                      "allowed_updates": '["message","my_chat_member"]'}
-            if offset is not None:
-                params["offset"] = str(offset)
-            try:
-                updates = json.loads(self._http(api("getUpdates"), params)
-                                     ).get("result", [])
-            except (RuntimeError, ValueError) as exc:
-                msg = str(exc)
+                t0 = time.monotonic()
+                params = {"timeout": str(POLL_TIMEOUT_S),
+                          "allowed_updates": '["message","my_chat_member"]'}
+                if offset is not None:
+                    params["offset"] = str(offset)
+                updates = _reply_json(self._http(api("getUpdates"), params),
+                                      "Telegram").get("result") or []
+                last_err = ""
+                for upd in updates:
+                    offset = int(upd.get("update_id", 0)) + 1
+                    try:
+                        self._handle_update(token, upd)
+                    except Exception as exc:  # noqa: BLE001 - one bad update only
+                        self.results.put(("log", f"phone alerts: could not "
+                                                 f"handle a Telegram update "
+                                                 f"({type(exc).__name__})"))
+                if not updates and time.monotonic() - t0 < 1.0:
+                    time.sleep(1.0)      # a server answering instantly: no spin
+            except Exception as exc:  # noqa: BLE001 - the inbox must not die
+                msg = str(exc) if isinstance(exc, RuntimeError) \
+                    else f"unexpected error ({type(exc).__name__})"
                 self._inbox_error(msg, last_err)
                 last_err = msg
                 # 409: another program is reading this bot's updates.
                 time.sleep(30.0 if msg.startswith(("HTTP 409", "HTTP 401"))
                            else 10.0)
-                continue
-            last_err = ""
-            for upd in updates:
-                offset = int(upd.get("update_id", 0)) + 1
-                try:
-                    self._handle_update(token, upd)
-                except Exception as exc:  # noqa: BLE001 - one bad update only
-                    self.results.put(("log", f"phone alerts: could not handle "
-                                             f"a Telegram update ({exc!r})"))
-            if not updates and time.monotonic() - t0 < 1.0:
-                time.sleep(1.0)          # a server answering instantly: no spin
 
     def _inbox_error(self, msg: str, last: str) -> None:
         if msg == last:
@@ -548,17 +681,25 @@ class Notifier:
             "group": group,
         }
         with self._file_lock:
-            raw = self._raw_config()
-            subs = raw.setdefault("subscribers", [])
-            old = next((s for s in subs
-                        if str(s.get("chat_id")) == entry["chat_id"]), None)
+            subs, problem = read_subscribers(self.config_path)
+            if problem:
+                # Never write over a file we could not read: that would wipe
+                # everyone on it (PR #1 review). Say so instead.
+                self.results.put(("log", f"phone alerts: NOT adding "
+                                         f"{entry['name']} — {problem}"))
+                self._reply(token, entry["chat_id"],
+                            "Sorry — FD Studio could not add you just now. "
+                            "Please send /start again in a few minutes.")
+                return
+            old = next((x for x in subs if x["chat_id"] == entry["chat_id"]),
+                       None)
             if old is None:
                 subs.append(entry)
             else:
                 old.update(entry)
-            _write_json(self.config_path, raw)
-            others = [str(s["chat_id"]) for s in subs
-                      if str(s.get("chat_id")) != entry["chat_id"]]
+            _write_json(subscribers_path(self.config_path), subs)
+            others = [x["chat_id"] for x in subs
+                      if x["chat_id"] != entry["chat_id"]]
         cfg, _ = load_config(self.config_path)
 
         if old is None:
@@ -577,28 +718,27 @@ class Notifier:
     def _unsubscribe(self, token: str, chat: dict, reply: bool) -> None:
         chat_id = str(chat.get("id", ""))
         with self._file_lock:
-            raw = self._raw_config()
-            subs = raw.get("subscribers", [])
-            gone = [s for s in subs if str(s.get("chat_id")) == chat_id]
-            raw["subscribers"] = [s for s in subs
-                                  if str(s.get("chat_id")) != chat_id]
+            subs, problem = read_subscribers(self.config_path)
+            if problem:
+                self.results.put(("log", f"phone alerts: could not remove "
+                                         f"{chat_id} — {problem}"))
+                if reply:
+                    self._reply(token, chat_id, "Sorry — FD Studio could not "
+                                "remove you just now. Please send /stop again "
+                                "in a few minutes.")
+                return
+            gone = [x for x in subs if x["chat_id"] == chat_id]
             if gone:
-                _write_json(self.config_path, raw)
-            wearer = str(raw.get("wearer_name", "")).strip() or "the wearer"
+                _write_json(subscribers_path(self.config_path),
+                            [x for x in subs if x["chat_id"] != chat_id])
+        cfg, _ = load_config(self.config_path)
         if gone:
-            self.results.put(("log", f"phone alerts: {gone[0].get('name')} "
+            self.results.put(("log", f"phone alerts: {gone[0]['name']} "
                                      f"unsubscribed"))
         if reply:
             self._reply(token, chat_id, f"You've left the alert list for "
-                        f"{wearer}. Send /start to join again. If you added "
+                        f"{cfg.name}. Send /start to join again. If you added "
                         f"the ntfy topic, remove it in the ntfy app too.")
-
-    def _raw_config(self) -> dict:
-        try:
-            raw = json.loads(self.config_path.read_text(encoding="utf-8"))
-            return raw if isinstance(raw, dict) else _template()
-        except (OSError, ValueError):
-            return _template()
 
     @staticmethod
     def _ntfy_note(cfg: AlertConfig) -> str:

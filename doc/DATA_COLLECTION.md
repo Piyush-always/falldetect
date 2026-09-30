@@ -63,6 +63,16 @@ That exists so you do not have to reach the laptop mid-activity — reaching for
 a keyboard while falling onto a crash mat puts the reach in the recording, not
 the fall.
 
+A staged fall will usually trip the fall alert while you lie on the mat
+(red LED, laptop alarm). That is expected, and while a recording is running:
+
+- the **stop press still stops the recording** — it also clears the alert;
+- the family's **phones are not alerted** for a fall (a held SOS still is);
+- the laptop alarm still sounds, so the spotter knows the detector fired.
+
+Long-pressing the button is SOS (datalog 0.10.0+), not a recording control —
+keep presses short.
+
 Before each set, set the label in the Debug tab's inspector:
 
 | Field | Set to |

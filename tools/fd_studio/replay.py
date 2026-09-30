@@ -148,7 +148,9 @@ class SessionResult:
 
     @property
     def is_fall_label(self) -> bool:
-        return self.label.startswith("fall")
+        # Case-insensitive: a typed "Fall_forward" folder scored as a
+        # non-fall, so a missed fall counted as a correct TN (PR #1 review).
+        return self.label.lower().startswith("fall")
 
     @property
     def outcome(self) -> str:
